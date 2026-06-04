@@ -35,7 +35,6 @@
             <div class="flex justify-between"><span class="text-gray-400">초기 질량 (m₀):</span><span id="specMass" class="font-mono text-blue-300">-</span></div>
             <div class="flex justify-between"><span class="text-gray-400">투영 단면적 (A):</span><span id="specArea" class="font-mono text-blue-300">-</span></div>
             <div class="flex justify-between"><span class="text-gray-400">항력 계수 (Cd):</span><span id="specCd" class="font-mono text-blue-300">-</span></div>
-            <div class="flex justify-between"><span class="text-gray-400">구동 수명 (τ_life):</span><span id="specLife" class="font-mono text-blue-300">-</span></div>
             <div class="flex justify-between"><span class="text-gray-400">파편화 계수 (k_break):</span><span id="specK" class="font-mono text-emerald-400">-</span></div>
         </div>
 
@@ -79,7 +78,6 @@
     </div>
 
     <script>
-        // HTML 문서가 완전히 로드된 후 자바스크립트가 안전하게 실행되도록 보호
         document.addEventListener('DOMContentLoaded', () => {
             
             // 1. 물리 정수 선언
@@ -94,11 +92,11 @@
             const thetaAntipode = 3 * Math.PI / 2;
             const nemoHalfAngle = Rnemo / Re;
 
-            // 2. 위성 데이터셋
+            // 2. 위성 데이터셋 (life 값을 현실 시뮬레이션 시간에 맞게 증가시킴)
             const satellites = {
-                sputnik: { name: "스푸트니크 1호", m0: 83.6, A: 0.26, Cd: 2.1, life: 1, k_break: 5000 },
-                mir: { name: "미르 우주정거장", m0: 130000, A: 350, Cd: 2.3, life: 2, k_break: 150000 },
-                iss: { name: "국제우주정거장", m0: 450000, A: 2200, Cd: 2.6, life: 3, k_break: 400000 }
+                sputnik: { name: "스푸트니크 1호", m0: 83.6, A: 0.26, Cd: 2.1, life: 800, k_break: 5000 },
+                mir: { name: "미르 우주정거장", m0: 130000, A: 350, Cd: 2.3, life: 1200, k_break: 150000 },
+                iss: { name: "국제우주정거장", m0: 450000, A: 2200, Cd: 2.6, life: 1500, k_break: 400000 }
             };
 
             // 3. UI 요소 매핑
@@ -139,14 +137,12 @@
 
             // 5. 초기 화면 빌드 및 데이터 갱신
             function updateSpecs() {
-                // 안전장치: satSelect 값이 없으면 sputnik을 기본값으로 사용
                 let satKey = satSelect.value || "sputnik";
                 currentSat = satellites[satKey];
                 
                 document.getElementById('specMass').innerText = currentSat.m0.toLocaleString() + " kg";
                 document.getElementById('specArea').innerText = currentSat.A + " m²";
                 document.getElementById('specCd').innerText = currentSat.Cd;
-                document.getElementById('specLife').innerText = currentSat.life + " 초";
                 document.getElementById('specK').innerText = currentSat.k_break.toLocaleString();
                 updateSliderValue();
             }
@@ -269,7 +265,6 @@
 
                         if (simState === "DEORBIT") {
                             deorbitTime += dt;
-                            // 물리 엔진 기준 약 3500초(현실 체감 3~4초)가 지나도 낙하 못하면 실패
                             if (deorbitTime >= 3500) {
                                 simState = "FINISHED";
                                 isTimeoutFail = true;
@@ -422,7 +417,7 @@
             }
             requestAnimationFrame(mainLoop);
 
-        }); // DOMContentLoaded 끝
+        });
     </script>
 </body>
 </html>
