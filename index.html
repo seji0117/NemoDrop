@@ -163,4 +163,189 @@ class Simulation:
                 vel_angle = math.atan2(self.vy, self.vx)
                 # 속도 벡터와 지평선(위치 벡터의 접선) 사이의 각
                 gamma = abs(vel_angle - (pos_angle + math.pi/2))
-                if gamma > math
+                if gamma > math.pi/2:
+                    gamma = math.pi - gamma
+                self.gamma_entry = max(gamma, 0.0001) # 0 나누기 방지
+
+            # 중력
+            g = mu / (r_mag**2)
+            ax = -g * (self.x / r_mag)
+            ay = -g * (self.y / r_mag)
+            
+            # 대기 저항
+            if 0 < h <= 100000:
+                rho = rho_0 * math.exp(-h / H_scale)
+                v_mag = math.hypot(self.vx, self.vy)
+                drag = 0.5 * rho * (v_mag**2) * (sat_data["Cd"] * sat_data["A"] / sat_data["m0"])
+                ax -= drag * (self.vx / v_mag)
+                ay -= drag * (self.vy / v_mag)
+                
+            self.vx += ax * dt
+            self.vy += ay * dt
+            self.x += self.vx * dt
+            self.y += self.vy * dt
+            
+            # 지표면 충돌
+            if h <= 0:
+                self.calculate_result()
+                return
+
+        # 궤적 저장 (그리기용)
+        if len(self.trajectory) == 0 or math.hypot(self.trajectory[-1][0] - self.x, self.trajectory[-1][1] - self.y) > 50000:
+            self.trajectory.append((self.x, self.y))
+
+        # 역추진 후 2초(현실 시간) 경과 시 실패 판정
+        if time.time() - self.deorbit_start_time > 2.0:
+            self.state = "RESULT"
+            self.result_msg = "FAIL"
+
+    def calculate_result(self):
+        self.state = "RESULT"
+        sat_data = SATELLITES[self.selected_sat]
+        
+        if not self.entered_atmosphere:
+            self.result_msg = "FAIL"
+            return
+            
+        # 최종 호 길이 계산 L = k / sin(gamma)
+        L_final = sat_data["k"] / math.sin(self.gamma_entry)
+        
+        # 착탄 지점의 각도
+        impact_angle = math.atan2(self.y, self.x)
+        
+        # 파편이 퍼지는 각도 범위 (라디안)
+        arc_spread = L_final / R_e
+        
+        self.debris_arc = (impact_angle - arc_spread/2, impact_angle + arc_spread/2)
+        
+        # 포인트 니모 기준 범위 (화면 하단 y축 양수 방향이므로 각도는 pi/2)
+        nemo_angle = math.pi / 2
+        nemo_spread = R_nemo / R_e
+        nemo_min = nemo_angle - nemo_spread
+        nemo_max = nemo_angle + nemo_spread
+        
+        # 파편 범위가 포인트 니모 안에 완전히 들어오는지 확인
+        if self.debris_arc[0] >= nemo_min and self.debris_arc[1] <= nemo_max:
+            self.result_msg = "SUCCESS"
+        else:
+            self.result_msg = "FAIL"
+
+    def draw_earth_and_nemo(self):
+        # 지구 그리기
+        pygame.draw.circle(screen, COLORS["earth"], CENTER, int(R_e / SCALE))
+        # 100km 대기권 선 (흐릿하게)
+        pygame.draw.circle(screen, COLORS["atmosphere"], CENTER, int((R_e + 100000) / SCALE), 1)
+        
+        # 포인트 니모 호 그리기
+        nemo_spread = R_nemo / R_e
+        rect_size = int(R_e / SCALE) * 2
+        earth_rect = pygame.Rect(CENTER[0] - rect_size//2, CENTER[1] - rect_size//2, rect_size, rect_size)
+        
+        # Pygame의 arc는 0이 우측, 반시계 방향. 
+        # 수식에서 하단은 pi/2 부근이나, pygame arc 기준 하단은 3*pi/2에서 pi 사이 등 변환 필요
+        # 간단하게 폴리곤이나 선분으로 계산하여 그림
+        nemo_angle = math.pi / 2
+        start_a = nemo_angle - nemo_spread
+        end_a = nemo_angle + nemo_spread
+        points = []
+        for a in range(int(math.degrees(start_a)), int(math.degrees(end_a)) + 1):
+            rad = math.radians(a)
+            px = CENTER[0] + math.cos(rad) * (R_e / SCALE)
+            py = CENTER[1] + math.sin(rad) * (R_e / SCALE)
+            points.append((px, py))
+        if len(points) > 1:
+            pygame.draw.lines(screen, COLORS["nemo"], False, points, 5)
+
+    def run(self):
+        running = True
+        clock = pygame.time.Clock()
+        
+        while running:
+            screen.fill(COLORS["bg"])
+            
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                    
+                if self.state == "SELECT":
+                    for btn in self.buttons:
+                        if event.type == pygame.MOUSEBUTTONDOWN and btn.is_clicked(event.pos):
+                            self.selected_sat = btn.text
+                    self.slider.handle_event(event)
+                    if event.type == pygame.MOUSEBUTTONDOWN and self.start_btn.is_clicked(event.pos):
+                        if self.selected_sat:
+                            self.start_orbit()
+                            
+                elif self.state == "RESULT":
+                    if event.type == pygame.MOUSEBUTTONDOWN and self.reset_btn.is_clicked(event.pos):
+                        self.reset()
+            
+            if self.state == "SELECT":
+                draw_text("Select Satellite & Delta-V", title_font, COLORS["text"], WIDTH//2, 100, "center")
+                for btn in self.buttons:
+                    # 선택된 버튼 하이라이트
+                    if btn.text == self.selected_sat:
+                        pygame.draw.rect(screen, COLORS["sat"], btn.rect, 4)
+                    btn.draw()
+                self.slider.draw()
+                self.start_btn.draw()
+                
+            else:
+                self.draw_earth_and_nemo()
+                
+                if self.state == "ORBITING":
+                    t = time.time() - self.orbit_start_time
+                    tau = SATELLITES[self.selected_sat]["tau"]
+                    if t >= tau:
+                        self.trigger_deorbit()
+                    else:
+                        # 반 바퀴 도는 애니메이션
+                        angle = math.pi/2 + self.visual_omega * t
+                        vx = CENTER[0] + math.cos(angle) * (r_0 / SCALE)
+                        vy = CENTER[1] + math.sin(angle) * (r_0 / SCALE)
+                        pygame.draw.circle(screen, COLORS["sat"], (int(vx), int(vy)), 4)
+                        
+                elif self.state == "DEORBITING":
+                    self.update_physics()
+                    
+                    # 궤적 그리기
+                    pts = [(CENTER[0] + tx/SCALE, CENTER[1] + ty/SCALE) for tx, ty in self.trajectory]
+                    if len(pts) > 1:
+                        pygame.draw.lines(screen, COLORS["traj"], False, pts, 2)
+                        
+                    # 현재 위성 그리기
+                    cx = CENTER[0] + self.x / SCALE
+                    cy = CENTER[1] + self.y / SCALE
+                    pygame.draw.circle(screen, COLORS["sat"], (int(cx), int(cy)), 4)
+                    
+                elif self.state == "RESULT":
+                    # 궤적 유지
+                    pts = [(CENTER[0] + tx/SCALE, CENTER[1] + ty/SCALE) for tx, ty in self.trajectory]
+                    if len(pts) > 1:
+                        pygame.draw.lines(screen, COLORS["traj"], False, pts, 2)
+                        
+                    # 파편 호 그리기
+                    if self.debris_arc:
+                        points = []
+                        start_a = math.degrees(self.debris_arc[0])
+                        end_a = math.degrees(self.debris_arc[1])
+                        for a in range(int(min(start_a, end_a)), int(max(start_a, end_a)) + 1):
+                            rad = math.radians(a)
+                            px = CENTER[0] + math.cos(rad) * (R_e / SCALE)
+                            py = CENTER[1] + math.sin(rad) * (R_e / SCALE)
+                            points.append((px, py))
+                        if len(points) > 1:
+                            pygame.draw.lines(screen, COLORS["sat"], False, points, 8)
+                    
+                    color = COLORS["success"] if self.result_msg == "SUCCESS" else COLORS["fail"]
+                    draw_text(self.result_msg, title_font, color, WIDTH//2, 100, "center")
+                    self.reset_btn.draw()
+
+            pygame.display.flip()
+            clock.tick(60)
+
+if __name__ == "__main__":
+    sim = Simulation()
+    sim.run()
+    pygame.quit()
+    sys.exit()
