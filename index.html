@@ -1,6 +1,4 @@
-import os
-
-html_content = """<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
@@ -14,7 +12,7 @@ html_content = """<!DOCTYPE html>
 </head>
 <body class="flex flex-col lg:flex-row h-screen w-screen overflow-hidden p-4 gap-4">
 
-    <div class="w-full lg:w-96 flex flex-col gap-4 bg-gray-900 bg-opacity-80 backdrop-blur border border-gray-800 rounded-xl p-5 shadow-2xl overflow-y-auto">
+    <div class="w-full lg:w-80 flex flex-col gap-4 bg-gray-900 bg-opacity-80 backdrop-blur border border-gray-800 rounded-xl p-5 shadow-2xl overflow-y-auto shrink-0">
         <div>
             <h1 class="text-xl font-bold text-blue-400 flex items-center gap-2">
                 🚀 Nemo Drop
@@ -68,10 +66,10 @@ html_content = """<!DOCTYPE html>
         </div>
     </div>
 
-    <div class="flex-1 relative bg-gray-950 rounded-xl border border-gray-800 overflow-hidden flex items-center justify-center">
-        <canvas id="simCanvas" width="800" height="800" class="w-full h-full max-w-[800px] max-h-[800px] aspect-square"></canvas>
+    <div class="flex-1 relative bg-gray-950 rounded-xl border border-gray-800 flex items-center justify-center p-2 min-h-[50vh]">
+        <canvas id="simCanvas" width="800" height="800" class="w-full h-full object-contain"></canvas>
         
-        <div id="resultOverlay" class="absolute inset-0 bg-black bg-opacity-60 backdrop-blur-sm flex flex-col items-center justify-center gap-2 hidden transition-all duration-300 scale-95 opacity-0">
+        <div id="resultOverlay" class="absolute inset-0 bg-black bg-opacity-60 backdrop-blur-sm flex flex-col items-center justify-center gap-2 hidden transition-all duration-300 scale-95 opacity-0 rounded-xl">
             <h2 id="resultTitle" class="text-5xl font-black tracking-wider">SUCCESS</h2>
             <p id="resultDesc" class="text-sm text-gray-300 max-w-sm text-center mt-2"></p>
             <button id="overlayResetBtn" class="mt-4 bg-white text-gray-950 font-bold px-6 py-2 rounded-full hover:bg-gray-200 transition active:scale-95 cursor-pointer">
@@ -127,12 +125,14 @@ html_content = """<!DOCTYPE html>
         let dv = parseFloat(dvSlider.value);
         let simState = "IDLE"; 
         let simTime = 0;
+        let deorbitTime = 0; // 역추진 이후 경과 시간 측정을 위한 변수
         
         let px = 0, py = 0, vx = 0, vy = 0;
         let entryGamma = 0;
         let Lfinal = 0;
         let arcSpanAngle = 0;
         let firstAtmosphereIn = true;
+        let isTimeoutFail = false; // 3초 타임아웃 판정 변수
 
         // 5. 초기 화면 빌드 및 데이터 갱신
         function updateSpecs() {
@@ -153,11 +153,10 @@ html_content = """<!DOCTYPE html>
         satSelect.addEventListener('change', updateSpecs);
         dvSlider.addEventListener('input', updateSliderValue);
 
-        // 6. 물리 엔진 연산 및 그리기 코어
+        // 6. 그리기 코어
         function drawScene() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // 우주 배경 가이드 라인
             ctx.strokeStyle = 'rgba(31, 41, 55, 0.4)';
             ctx.lineWidth = 1;
             for(let r = 100; r <= 350; r += 50) {
@@ -209,7 +208,7 @@ html_content = """<!DOCTYPE html>
                 ctx.fillStyle = '#ef4444';
                 ctx.beginPath(); ctx.arc(sx, sy, 4, 0, 2*Math.PI); ctx.fill();
                 ctx.font = '10px sans-serif';
-                ctx.fillText("기동 시작점 (Antipode)", sx, sy - 10);
+                ctx.fillText("기동 시작점", sx, sy - 10);
             }
             
             if (simState === "ORBITING" || simState === "DEORBIT" || simState === "ATMOSPHERE") {
@@ -252,6 +251,7 @@ html_content = """<!DOCTYPE html>
 
                     if (simTime >= currentSat.life) {
                         simState = "DEORBIT";
+                        deorbitTime = 0; // 감속 기동 시점 타이머 초기화
                         let vMag = Math.sqrt(vx*vx + vy*vy);
                         vx = (vx / vMag) * (vMag - dv);
                         vy = (vy / vMag) * (vMag - dv);
@@ -261,8 +261,21 @@ html_content = """<!DOCTYPE html>
                     let r = Math.sqrt(px*px + py*py);
                     let h = r - Re;
 
+                    // 역추진 이후 대기권에 들어가기 전까지의 시간 측정
+                    if (simState === "DEORBIT") {
+                        deorbitTime += dt;
+                        // 3초 경과 시 타임아웃 강제 종료 처리
+                        if (deorbitTime >= 3.0) {
+                            simState = "FINISHED";
+                            isTimeoutFail = true;
+                            evaluateMissionResult();
+                            break;
+                        }
+                    }
+
                     if (h <= 0) {
                         simState = "FINISHED";
+                        isTimeoutFail = false;
                         evaluateMissionResult();
                         break;
                     }
@@ -324,6 +337,19 @@ html_content = """<!DOCTYPE html>
 
         // 8. 미션 결과 평가
         function evaluateMissionResult() {
+            resultOverlay.classList.remove('hidden');
+            setTimeout(() => {
+                resultOverlay.classList.add('opacity-100', 'scale-100');
+            }, 50);
+
+            // 타임아웃 실패인 경우 패널 즉시 출력
+            if (isTimeoutFail) {
+                resultTitle.innerText = "MISSION FAIL 💥";
+                resultTitle.className = "text-5xl font-black tracking-wider text-red-500";
+                resultDesc.innerText = "역추진 기동 후 3초 이내에 낙하(대기권 진입)하지 못했습니다! 감속량(Δv)이 너무 낮아 우주 미아가 되었거나 궤도가 너무 높습니다.";
+                return;
+            }
+
             let landingTheta = Math.atan2(py, px);
             if (landingTheta < 0) landingTheta += 2 * Math.PI;
 
@@ -332,11 +358,6 @@ html_content = """<!DOCTYPE html>
 
             let totalArcInside = (angularDiff + arcSpanAngle/2 <= nemoHalfAngle);
 
-            resultOverlay.classList.remove('hidden');
-            setTimeout(() => {
-                resultOverlay.classList.add('opacity-100', 'scale-100');
-            }, 50);
-
             if (totalArcInside) {
                 resultTitle.innerText = "SUCCESS 🎯";
                 resultTitle.className = "text-5xl font-black tracking-wider text-emerald-400";
@@ -344,17 +365,19 @@ html_content = """<!DOCTYPE html>
             } else {
                 resultTitle.innerText = "MISSION FAIL 💥";
                 resultTitle.className = "text-5xl font-black tracking-wider text-red-500";
-                resultDesc.innerText = `낙하 통제 실패! 파편 범위가 포인트 니모를 벗어났습니다. 감속량(Δv)을 조절해 보세요.`;
+                resultDesc.innerText = `낙하 통제 실패! 대기권에는 진입했으나 파편 범위가 포인트 니모를 벗어났습니다. 감속량(Δv)을 다르게 조절해 보세요.`;
             }
         }
 
-        // 9. 인터페이스 제어 (조건부 진입 방지 로직 완전 제거)
+        // 9. 인터페이스 제어
         function startSimulation() {
             if (simState !== "IDLE") return;
             
             simState = "ORBITING";
             simTime = 0;
+            deorbitTime = 0;
             firstAtmosphereIn = true;
+            isTimeoutFail = false;
             satSelect.disabled = true;
             dvSlider.disabled = true;
             startBtn.disabled = true;
@@ -364,9 +387,11 @@ html_content = """<!DOCTYPE html>
         function resetSimulation() {
             simState = "IDLE";
             simTime = 0;
+            deorbitTime = 0;
             px = 0; py = 0; vx = 0; vy = 0;
             entryGamma = 0; Lfinal = 0; arcSpanAngle = 0;
             firstAtmosphereIn = true;
+            isTimeoutFail = false;
             
             satSelect.disabled = false;
             dvSlider.disabled = false;
@@ -394,9 +419,3 @@ html_content = """<!DOCTYPE html>
     </script>
 </body>
 </html>
-"""
-
-with open("index.html", "w", encoding="utf-8") as f:
-    f.write(html_content)
-
-print("🎉 스포일러 방지 패치 완료! index.html이 업데이트되었습니다.")
