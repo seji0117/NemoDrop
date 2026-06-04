@@ -1,70 +1,166 @@
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nemo Drop - Deorbit Simulator</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body { background-color: #0b0f19; color: #f3f4f6; font-family: system-ui, sans-serif; }
-        canvas { background: radial-gradient(circle, #111827 0%, #030712 100%); }
-    </style>
-</head>
-<body class="flex flex-col lg:flex-row h-screen w-screen overflow-hidden p-4 gap-4">
+import pygame
+import math
+import sys
+import time
 
-    <div class="w-full lg:w-80 flex flex-col gap-4 bg-gray-900 bg-opacity-80 backdrop-blur border border-gray-800 rounded-xl p-5 shadow-2xl overflow-y-auto shrink-0">
-        <div>
-            <h1 class="text-xl font-bold text-blue-400 flex items-center gap-2">
-                🚀 Nemo Drop
-            </h1>
-            <p class="text-xs text-gray-400 mt-1">포인트 니모 통제 낙하 시뮬레이터</p>
-        </div>
+# --- 초기화 및 화면 설정 ---
+pygame.init()
+WIDTH, HEIGHT = 800, 800
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Deorbit Simulation")
+
+# --- 물리 상수 ---
+mu = 3.986e14           # 지구 중력 상수
+R_e = 6378000           # 지구 반지름 (m)
+h_0 = 400000            # 초기 고도 (m)
+r_0 = R_e + h_0         # 초기 거리
+rho_0 = 1.225           # 기본 대기 밀도
+H_scale = 7500          # 대기 스케일 하이트 (m)
+R_nemo = 2688000        # 포인트 니모 반경 (m)
+
+# --- 시각화 스케일 비율 ---
+# 화면 픽셀당 실제 미터(m) 비율 설정 (지구를 화면 중앙에 적절히 배치)
+SCALE = R_e / 250       
+CENTER = (WIDTH // 2, HEIGHT // 2)
+
+# --- 위성 데이터 (m0, A, Cd, tau, k_break) ---
+SATELLITES = {
+    "Sputnik 1": {"m0": 83.6, "A": 0.26, "Cd": 2.1, "tau": 1, "k": 5000},
+    "Mir": {"m0": 130000, "A": 350, "Cd": 2.3, "tau": 2, "k": 150000},
+    "ISS": {"m0": 450000, "A": 2200, "Cd": 2.6, "tau": 3, "k": 400000}
+}
+
+# --- 색상 ---
+COLORS = {
+    "bg": (10, 10, 20),
+    "earth": (30, 100, 180),
+    "atmosphere": (50, 130, 200),
+    "nemo": (200, 50, 50),
+    "sat": (255, 255, 255),
+    "traj": (255, 200, 0),
+    "ui": (200, 200, 200),
+    "text": (255, 255, 255),
+    "success": (0, 255, 0),
+    "fail": (255, 0, 0)
+}
+
+font = pygame.font.SysFont(None, 24)
+title_font = pygame.font.SysFont(None, 36)
+
+def draw_text(text, font, color, x, y, align="left"):
+    surf = font.render(text, True, color)
+    rect = surf.get_rect()
+    if align == "center":
+        rect.center = (x, y)
+    else:
+        rect.topleft = (x, y)
+    screen.blit(surf, rect)
+
+class Button:
+    def __init__(self, x, y, w, h, text):
+        self.rect = pygame.Rect(x, y, w, h)
+        self.text = text
+
+    def draw(self):
+        pygame.draw.rect(screen, COLORS["ui"], self.rect, 2)
+        draw_text(self.text, font, COLORS["text"], self.rect.centerx, self.rect.centery, "center")
+
+    def is_clicked(self, pos):
+        return self.rect.collidepoint(pos)
+
+class Slider:
+    def __init__(self, x, y, w, h, min_val, max_val):
+        self.rect = pygame.Rect(x, y, w, h)
+        self.min_val = min_val
+        self.max_val = max_val
+        self.val = min_val
+        self.handle_rect = pygame.Rect(x, y - 5, 10, h + 10)
+        self.dragging = False
+
+    def draw(self):
+        pygame.draw.rect(screen, COLORS["ui"], self.rect)
+        pygame.draw.rect(screen, COLORS["sat"], self.handle_rect)
+
+    def handle_event(self, event):
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.handle_rect.collidepoint(event.pos) or self.rect.collidepoint(event.pos):
+                self.dragging = True
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            self.dragging = False
+        elif event.type == pygame.MOUSEMOTION and self.dragging:
+            self.handle_rect.centerx = max(self.rect.left, min(event.pos[0], self.rect.right))
+            ratio = (self.handle_rect.centerx - self.rect.left) / self.rect.width
+            self.val = self.min_val + ratio * (self.max_val - self.min_val)
+
+class Simulation:
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.state = "SELECT" # SELECT, ORBITING, DEORBITING, RESULT
+        self.selected_sat = None
+        self.buttons = [
+            Button(200, 200, 400, 50, "Sputnik 1"),
+            Button(200, 280, 400, 50, "Mir"),
+            Button(200, 360, 400, 50, "ISS")
+        ]
+        self.slider = Slider(250, 500, 300, 10, 10, 300)
+        self.start_btn = Button(300, 600, 200, 50, "START")
+        self.reset_btn = Button(300, 700, 200, 50, "RESET")
         
-        <hr class="border-gray-800">
+        self.x, self.y = 0.0, 0.0
+        self.vx, self.vy = 0.0, 0.0
+        self.orbit_start_time = 0
+        self.deorbit_start_time = 0
+        self.trajectory = []
+        
+        self.entered_atmosphere = False
+        self.gamma_entry = 0
+        self.result_msg = ""
+        self.debris_arc = None # (start_angle, end_angle)
 
-        <div>
-            <label class="block text-sm font-semibold text-gray-300 mb-2">1. 타깃 위성 선택</label>
-            <select id="satSelect" class="w-full bg-gray-800 border border-gray-700 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-blue-500">
-                <option value="sputnik">스푸트니크 1호 (Sputnik 1) - 초급</option>
-                <option value="mir">미르 우주정거장 (Mir) - 중급</option>
-                <option value="iss">국제우주정거장 (ISS) - 상급</option>
-            </select>
-        </div>
+    def start_orbit(self):
+        self.state = "ORBITING"
+        self.orbit_start_time = time.time()
+        # 가상 수명(초) 동안 반 바퀴를 돌아 북극(시작점)에 도달하도록 각속도 설정
+        self.visual_omega = math.pi / SATELLITES[self.selected_sat]["tau"]
+        # 남극에서 출발하여 북극으로 감
+        self.current_angle = math.pi / 2 
 
-        <div class="bg-gray-950 rounded-lg p-3 border border-gray-800 text-xs flex flex-col gap-1.5">
-            <div class="flex justify-between"><span class="text-gray-400">초기 질량 (m₀):</span><span id="specMass" class="font-mono text-blue-300">-</span></div>
-            <div class="flex justify-between"><span class="text-gray-400">투영 단면적 (A):</span><span id="specArea" class="font-mono text-blue-300">-</span></div>
-            <div class="flex justify-between"><span class="text-gray-400">항력 계수 (Cd):</span><span id="specCd" class="font-mono text-blue-300">-</span></div>
-            <div class="flex justify-between"><span class="text-gray-400">구동 수명 (τ_life):</span><span id="specLife" class="font-mono text-blue-300">-</span></div>
-            <div class="flex justify-between"><span class="text-gray-400">파편화 계수 (k_break):</span><span id="specK" class="font-mono text-emerald-400">-</span></div>
-        </div>
+    def trigger_deorbit(self):
+        self.state = "DEORBITING"
+        self.deorbit_start_time = time.time()
+        self.trajectory = []
+        self.entered_atmosphere = False
+        
+        # 북극(화면 상단)에서 물리적 위치 시작
+        self.x = 0.0
+        self.y = -r_0
+        
+        # v0와 델타v 계산
+        v_0 = math.sqrt(mu / r_0)
+        v_a = v_0 - self.slider.val
+        
+        # y축 음수 방향(위)에 있으므로, 속도는 x축 양수 방향
+        self.vx = v_a
+        self.vy = 0.0
 
-        <div>
-            <div class="flex justify-between text-sm font-semibold text-gray-300 mb-1">
-                <label>2. 역추진 감속량 (Δv)</label>
-                <span id="dvValue" class="text-blue-400 font-mono font-bold">150 m/s</span>
-            </div>
-            <input type="range" id="dvSlider" min="10" max="300" value="150" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500">
-        </div>
-
-        <div class="flex gap-2 mt-auto">
-            <button id="startBtn" class="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-4 rounded-lg transition shadow-lg active:scale-95 cursor-pointer">
-                시작 (Simulation)
-            </button>
-            <button id="resetBtn" class="bg-gray-800 hover:bg-gray-700 text-gray-300 font-bold py-3 px-4 rounded-lg transition active:scale-95 cursor-pointer">
-                리셋
-            </button>
-        </div>
-
-        <div class="bg-gray-950 border border-gray-800 rounded-lg p-3 text-xs flex flex-col gap-1.5 font-mono">
-            <div class="text-gray-400 border-b border-gray-800 pb-1 mb-1 font-sans font-semibold">Live Telemetry</div>
-            <div class="flex justify-between"><span>Phase:</span><span id="telePhase" class="text-yellow-400">-</span></div>
-            <div class="flex justify-between"><span>Altitude:</span><span id="teleAlt">-</span></div>
-            <div class="flex justify-between"><span>Speed:</span><span id="teleSpeed">-</span></div>
-            <div class="flex justify-between"><span>Entry Angle (γ):</span><span id="teleGamma" class="text-orange-400">-</span></div>
-            <div class="flex justify-between"><span>Frag Arc (L_final):</span><span id="teleLfinal" class="text-emerald-400">-</span></div>
-        </div>
-    </div>
-
-    <div class="flex-1 relative bg-gray-950 rounded-xl border border-gray-800 flex items-center justify-center p-2 min-h-[50vh]">
-        <canvas id="
+    def update_physics(self):
+        # 궤도 역학 수치 해석을 위한 서브 스텝 (물리 시간 가속)
+        dt = 5.0 
+        substeps = 100
+        
+        sat_data = SATELLITES[self.selected_sat]
+        
+        for _ in range(substeps):
+            r_mag = math.hypot(self.x, self.y)
+            h = r_mag - R_e
+            
+            # 대기권 진입 각도 측정 (고도 100km 이하 진입 시 딱 한 번)
+            if h <= 100000 and not self.entered_atmosphere:
+                self.entered_atmosphere = True
+                pos_angle = math.atan2(self.y, self.x)
+                vel_angle = math.atan2(self.vy, self.vx)
+                # 속도 벡터와 지평선(위치 벡터의 접선) 사이의 각
+                gamma = abs(vel_angle - (pos_angle + math.pi/2))
+                if gamma > math
