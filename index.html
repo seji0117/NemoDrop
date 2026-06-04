@@ -1,238 +1,283 @@
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.animation as animation
-from matplotlib.widgets import Slider, Button, RadioButtons
-import time
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>위성 대기권 재진입 시뮬레이션</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; background-color: #f4f4f9; margin: 0; padding: 20px; }
+        canvas { background-color: white; border: 1px solid #ccc; border-radius: 10px; margin-top: 20px; }
+        .controls { margin-top: 15px; padding: 15px; background: white; display: inline-block; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .control-group { margin-bottom: 10px; }
+        button { padding: 8px 15px; margin: 0 5px; cursor: pointer; border: none; border-radius: 5px; font-weight: bold; }
+        #startBtn { background-color: #007bff; color: white; }
+        #resetBtn { background-color: #dc3545; color: white; }
+        #resultText { font-size: 24px; font-weight: bold; margin-top: 15px; height: 30px; }
+    </style>
+</head>
+<body>
 
-# ==========================================
-# 1. 물리 상수 및 위성 데이터
-# ==========================================
-MU = 3.986e14             # 지구 중력 상수 (m^3/s^2)
-RE = 6378000              # 지구 반지름 (m)
-H0 = 400000               # 초기 고도 (m)
-R0 = RE + H0              # 초기 궤도 반경 (m)
-V0 = np.sqrt(MU / R0)     # 초기 원궤도 선속도 (m/s)
-RHO0 = 1.225              # 해수면 대기 밀도 (kg/m^3)
-H_SCALE = 7500            # 대기 스케일 하이트 (m)
-R_NEMO = 2688000          # 포인트 니모 합격 반경 (m)
-ATM_H = 100000            # 대기권 진입 기준 고도 (m)
+    <h2>위성 Deorbit 시뮬레이터</h2>
+    
+    <div class="controls">
+        <div class="control-group">
+            <label><input type="radio" name="satellite" value="Sputnik 1" checked> 스푸트니크 1호</label>
+            <label><input type="radio" name="satellite" value="Mir"> 미르 우주정거장</label>
+            <label><input type="radio" name="satellite" value="ISS"> 국제우주정거장(ISS)</label>
+        </div>
+        <div class="control-group">
+            <label for="dvSlider">감속량 (Δv): <span id="dvValue">10</span> m/s</label><br>
+            <input type="range" id="dvSlider" min="10" max="300" value="10" style="width: 300px;">
+        </div>
+        <div>
+            <button id="startBtn">Start</button>
+            <button id="resetBtn">Reset</button>
+        </div>
+    </div>
 
-SATELLITES = {
-    'Sputnik 1': {'m': 83.6, 'A': 0.26, 'Cd': 2.1, 'tau': 1.0, 'k': 5000},
-    'Mir':       {'m': 130000, 'A': 350,  'Cd': 2.3, 'tau': 2.0, 'k': 150000},
-    'ISS':       {'m': 450000, 'A': 2200, 'Cd': 2.6, 'tau': 3.0, 'k': 400000}
-}
+    <div id="resultText"></div>
+    <canvas id="simCanvas" width="600" height="600"></canvas>
 
-# ==========================================
-# 2. 시뮬레이션 클래스 정의
-# ==========================================
-class DeorbitSimulation:
-    def __init__(self):
-        self.fig, self.ax = plt.subplots(figsize=(8, 8))
-        self.fig.subplots_adjust(bottom=0.3)
-        self.ax.set_aspect('equal')
-        self.ax.axis('off')
-        
-        # UI 상태 변수
-        self.state = 'IDLE'
-        self.sat_name = 'Sputnik 1'
-        self.dv = 10.0
-        
-        # 물리 상태 변수
-        self.x, self.y, self.vx, self.vy = 0, 0, 0, 0
-        self.orbit_start_time = 0
-        self.deorbit_start_time = 0
-        self.entered_atm = False
-        self.L_final = 0
-        
-        self.setup_visuals()
-        self.setup_ui()
-        
-        self.anim = animation.FuncAnimation(self.fig, self.update, interval=30, blit=False, cache_frame_data=False)
+    <script>
+        // 1. 물리 상수 설정
+        const MU = 3.986e14;
+        const RE = 6378000;
+        const H0 = 400000;
+        const R0 = RE + H0;
+        const V0 = Math.sqrt(MU / R0);
+        const RHO0 = 1.225;
+        const H_SCALE = 7500;
+        const R_NEMO = 2688000;
+        const ATM_H = 100000;
 
-    def setup_visuals(self):
-        self.ax.set_xlim(-(R0 + 500000), R0 + 500000)
-        self.ax.set_ylim(-(R0 + 500000), R0 + 500000)
-        
-        # 지구 (파란색)
-        earth = plt.Circle((0, 0), RE, color='#1f77b4', zorder=1)
-        self.ax.add_patch(earth)
-        
-        # 대기권 (하늘색, 투명도 적용)
-        atm = plt.Circle((0, 0), RE + ATM_H, color='lightblue', alpha=0.2, zorder=0)
-        self.ax.add_patch(atm)
-        
-        # 포인트 니모 구역 (초록색 호)
-        # 타겟 센터를 오른쪽(theta=0)으로 설정
-        nemo_angles = np.linspace(-R_NEMO/RE, R_NEMO/RE, 100)
-        self.ax.plot(RE * np.cos(nemo_angles), RE * np.sin(nemo_angles), color='lime', linewidth=5, zorder=2)
-        
-        # 위성/파편 그래픽 객체
-        self.sat_plot, = self.ax.plot([], [], 'o', color='black', markersize=6, zorder=3)
-        
-        # 결과 텍스트 (성공/실패)
-        self.result_text = self.ax.text(0, 0, "", fontsize=30, fontweight='bold', 
-                                        color='red', ha='center', va='center', zorder=4)
+        const SATELLITES = {
+            'Sputnik 1': { m: 83.6, A: 0.26, Cd: 2.1, tau: 1000, k: 5000 },
+            'Mir':       { m: 130000, A: 350, Cd: 2.3, tau: 2000, k: 150000 },
+            'ISS':       { m: 450000, A: 2200, Cd: 2.6, tau: 3000, k: 400000 }
+        };
 
-    def setup_ui(self):
-        # 라디오 버튼 (위성 선택)
-        ax_radio = plt.axes([0.1, 0.1, 0.25, 0.15])
-        self.radio = RadioButtons(ax_radio, ('Sputnik 1', 'Mir', 'ISS'))
-        self.radio.on_clicked(self.set_satellite)
+        // 2. 캔버스 및 렌더링 설정
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        const SCALE = (canvas.width / 2 - 20) / (R0 + 200000); 
+        const CX = canvas.width / 2;
+        const CY = canvas.height / 2;
+
+        // 3. 상태 변수
+        let state = 'IDLE'; // IDLE, ORBITING, DEORBITING, DONE
+        let satX = 0, satY = -R0, satVx = V0, satVy = 0;
+        let selectedSat = 'Sputnik 1';
+        let dV = 10;
+        let orbitStartTime = 0;
+        let deorbitStartTime = 0;
+        let enteredAtm = false;
+        let L_final = 0;
+        let animId;
+
+        // UI 요소 연결
+        const dvSlider = document.getElementById('dvSlider');
+        const dvValue = document.getElementById('dvValue');
+        const resultText = document.getElementById('resultText');
         
-        # 슬라이더 (감속량)
-        ax_slider = plt.axes([0.45, 0.2, 0.4, 0.03])
-        self.slider = Slider(ax_slider, '$\Delta v$', 10.0, 300.0, valinit=10.0)
-        self.slider.on_changed(self.set_dv)
-        
-        # Start 버튼
-        ax_start = plt.axes([0.45, 0.1, 0.15, 0.05])
-        self.btn_start = Button(ax_start, 'Start')
-        self.btn_start.on_clicked(self.start_sim)
-        
-        # Reset 버튼
-        ax_reset = plt.axes([0.65, 0.1, 0.15, 0.05])
-        self.btn_reset = Button(ax_reset, 'Reset')
-        self.btn_reset.on_clicked(self.reset_sim)
+        document.querySelectorAll('input[name="satellite"]').forEach(radio => {
+            radio.addEventListener('change', (e) => selectedSat = e.target.value);
+        });
 
-    def set_satellite(self, label):
-        self.sat_name = label
+        dvSlider.addEventListener('input', (e) => {
+            dV = parseFloat(e.target.value);
+            dvValue.innerText = dV;
+        });
 
-    def set_dv(self, val):
-        self.dv = val
+        document.getElementById('startBtn').addEventListener('click', () => {
+            if (state === 'IDLE' || state === 'DONE') {
+                state = 'ORBITING';
+                orbitStartTime = Date.now();
+                enteredAtm = false;
+                resultText.innerText = "";
+                satX = 0; satY = -R0; satVx = V0; satVy = 0;
+                if(animId) cancelAnimationFrame(animId);
+                loop();
+            }
+        });
 
-    def start_sim(self, event):
-        if self.state in ['IDLE', 'DONE']:
-            self.state = 'ORBITING'
-            self.orbit_start_time = time.time()
-            self.result_text.set_text("")
-            self.entered_atm = False
-            self.sat_plot.set_marker('o')
-            self.sat_plot.set_linestyle('')
-            self.sat_plot.set_color('black')
+        document.getElementById('resetBtn').addEventListener('click', () => {
+            state = 'IDLE';
+            resultText.innerText = "";
+            if(animId) cancelAnimationFrame(animId);
+            drawScene();
+        });
 
-    def reset_sim(self, event):
-        self.state = 'IDLE'
-        self.result_text.set_text("")
-        self.sat_plot.set_data([], [])
-
-    def rk4_step(self, dt):
-        sat = SATELLITES[self.sat_name]
-        
-        def derivatives(state):
-            sx, sy, svx, svy = state
-            r = np.hypot(sx, sy)
-            v = np.hypot(svx, svy)
+        // 4. 물리 시뮬레이션 (RK4)
+        function rk4Step(dt) {
+            const sat = SATELLITES[selectedSat];
             
-            # 중력 가속도
-            ax = -MU * sx / r**3
-            ay = -MU * sy / r**3
-            
-            # 대기 저항 가속도
-            if r < RE + ATM_H:
-                h = r - RE
-                rho = RHO0 * np.exp(-h / H_SCALE)
-                drag = 0.5 * rho * v * (sat['Cd'] * sat['A'] / sat['m'])
-                ax -= drag * svx / v
-                ay -= drag * svy / v
+            function derivatives(x, y, vx, vy) {
+                const r = Math.hypot(x, y);
+                const v = Math.hypot(vx, vy);
+                let ax = -MU * x / Math.pow(r, 3);
+                let ay = -MU * y / Math.pow(r, 3);
                 
-            return np.array([svx, svy, ax, ay])
+                if (r < RE + ATM_H) {
+                    const h = r - RE;
+                    const rho = RHO0 * Math.exp(-h / H_SCALE);
+                    const drag = 0.5 * rho * v * (sat.Cd * sat.A / sat.m);
+                    ax -= drag * (vx / v);
+                    ay -= drag * (vy / v);
+                }
+                return { dx: vx, dy: vy, dvx: ax, dvy: ay };
+            }
 
-        s0 = np.array([self.x, self.y, self.vx, self.vy])
-        k1 = derivatives(s0)
-        k2 = derivatives(s0 + k1 * dt / 2)
-        k3 = derivatives(s0 + k2 * dt / 2)
-        k4 = derivatives(s0 + k3 * dt)
-        
-        new_state = s0 + (dt / 6) * (k1 + 2*k2 + 2*k3 + k4)
-        self.x, self.y, self.vx, self.vy = new_state
+            const k1 = derivatives(satX, satY, satVx, satVy);
+            const k2 = derivatives(satX + k1.dx*dt/2, satY + k1.dy*dt/2, satVx + k1.dvx*dt/2, satVy + k1.dvy*dt/2);
+            const k3 = derivatives(satX + k2.dx*dt/2, satY + k2.dy*dt/2, satVx + k2.dvx*dt/2, satVy + k2.dvy*dt/2);
+            const k4 = derivatives(satX + k3.dx*dt, satY + k3.dy*dt, satVx + k3.dvx*dt, satVy + k3.dvy*dt);
 
-    def update(self, frame):
-        if self.state == 'IDLE' or self.state == 'DONE':
-            return self.sat_plot, self.result_text
+            satX += (dt / 6) * (k1.dx + 2*k2.dx + 2*k3.dx + k4.dx);
+            satY += (dt / 6) * (k1.dy + 2*k2.dy + 2*k3.dy + k4.dy);
+            satVx += (dt / 6) * (k1.dvx + 2*k2.dvx + 2*k3.dvx + k4.dvx);
+            satVy += (dt / 6) * (k1.dvy + 2*k2.dvy + 2*k3.dvy + k4.dvy);
+        }
 
-        # 1. 궤도 진입 (포인트 니모 대척점으로 이동)
-        if self.state == 'ORBITING':
-            elapsed = time.time() - self.orbit_start_time
-            tau = SATELLITES[self.sat_name]['tau']
-            
-            # 위에서 출발하여 tau초 만에 반대편(대척점, theta=pi)으로 이동
-            progress = min(elapsed / tau, 1.0)
-            theta = np.pi/2 + progress * (np.pi/2)  # 90도에서 180도(대척점)로 이동
-            
-            self.x = R0 * np.cos(theta)
-            self.y = R0 * np.sin(theta)
-            self.sat_plot.set_data([self.x], [self.y])
-            
-            if elapsed >= tau:
-                self.state = 'DEORBITING'
-                self.deorbit_start_time = time.time()
-                # 대척점(왼쪽)에서 역추진 적용 (반시계 방향 낙하)
-                v_new = V0 - self.dv
-                self.x, self.y = -R0, 0
-                self.vx, self.vy = 0, -v_new 
+        // 5. 그리기 로직
+        function drawScene() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        # 2. 역추진 낙하 시뮬레이션 (물리 엔진 적용)
-        elif self.state == 'DEORBITING':
-            # 2초 타임아웃 룰 적용 (무한 궤도 비행 방지)
-            if time.time() - self.deorbit_start_time > 2.0:
-                self.result_text.set_text("FAIL")
-                self.result_text.set_color("red")
-                self.state = 'DONE'
-                return self.sat_plot, self.result_text
+            // 대기권 (연한 하늘색)
+            ctx.beginPath();
+            ctx.arc(CX, CY, (RE + ATM_H) * SCALE, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(173, 216, 230, 0.3)';
+            ctx.fill();
 
-            # 빠른 시각화를 위한 서브스텝 처리
-            dt = 2.0 
-            substeps = 50 
-            
-            for _ in range(substeps):
-                self.rk4_step(dt)
-                r = np.hypot(self.x, self.y)
+            // 지구 (파란색)
+            ctx.beginPath();
+            ctx.arc(CX, CY, RE * SCALE, 0, Math.PI * 2);
+            ctx.fillStyle = '#1f77b4';
+            ctx.fill();
+
+            // 포인트 니모 (초록색 호 - 바닥 중앙)
+            const nemoAngle = R_NEMO / RE;
+            ctx.beginPath();
+            ctx.arc(CX, CY, RE * SCALE, Math.PI/2 - nemoAngle, Math.PI/2 + nemoAngle);
+            ctx.strokeStyle = 'lime';
+            ctx.lineWidth = 5;
+            ctx.stroke();
+
+            // 위성 또는 파편 그리기
+            if (state !== 'IDLE') {
+                const rCurrent = Math.hypot(satX, satY);
+                if (enteredAtm) {
+                    // 파편 호(Arc)로 그리기
+                    const dTheta = L_final / rCurrent;
+                    const thetaCenter = Math.atan2(satY, satX);
+                    ctx.beginPath();
+                    ctx.arc(CX, CY, rCurrent * SCALE, thetaCenter - dTheta/2, thetaCenter + dTheta/2);
+                    ctx.strokeStyle = 'orange';
+                    ctx.lineWidth = 4;
+                    ctx.stroke();
+                } else {
+                    // 점으로 그리기
+                    ctx.beginPath();
+                    ctx.arc(CX + satX * SCALE, CY + satY * SCALE, 4, 0, Math.PI * 2);
+                    ctx.fillStyle = 'black';
+                    ctx.fill();
+                }
+            }
+        }
+
+        // 6. 메인 게임 루프
+        function loop() {
+            if (state === 'DONE') {
+                drawScene();
+                return;
+            }
+
+            const now = Date.now();
+
+            // 궤도 도는 중 (상대 수명 처리)
+            if (state === 'ORBITING') {
+                const tau = SATELLITES[selectedSat].tau;
+                const elapsed = now - orbitStartTime;
+                const progress = Math.min(elapsed / tau, 1.0);
                 
-                # 3. 대기권 진입 순간 처리 (진입각 및 최종 호 길이 확정)
-                if r < RE + ATM_H and not self.entered_atm:
-                    self.entered_atm = True
-                    v_sq = self.vx**2 + self.vy**2
-                    v_mag = np.sqrt(v_sq)
-                    E = v_sq / 2 - MU / r
-                    v_entry = np.sqrt(max(0, 2 * (E + MU / (RE + ATM_H))))
-                    
-                    h_ang = self.x * self.vy - self.y * self.vx
-                    v_h = h_ang / (RE + ATM_H)
-                    ratio = max(-1.0, min(1.0, abs(v_h) / v_entry))
-                    gamma_entry = max(np.arccos(ratio), 1e-6)
-                    
-                    self.L_final = SATELLITES[self.sat_name]['k'] / np.sin(gamma_entry)
-                    
-                    # 시각적 변화 트리거
-                    self.sat_plot.set_marker('')
-                    self.sat_plot.set_linestyle('-')
-                    self.sat_plot.set_color('orange')
-                    self.sat_plot.set_linewidth(3)
+                // 위(y=-R0)에서 아래(y=R0, 포인트 니모 대척점)로 반바퀴 회전
+                const theta = -Math.PI/2 + progress * Math.PI;
+                satX = R0 * Math.cos(theta);
+                satY = R0 * Math.sin(theta);
 
-                # 4. 바다(지표면) 도달 및 판정
-                if r <= RE:
-                    theta_center = np.arctan2(self.y, self.x)
-                    theta_center = (theta_center + np.pi) % (2*np.pi) - np.pi
-                    
-                    dtheta = self.L_final / RE
-                    arc_min = theta_center - dtheta/2
-                    arc_max = theta_center + dtheta/2
-                    
-                    nemo_max = R_NEMO / RE
-                    nemo_min = -nemo_max
-                    
-                    if arc_min >= nemo_min and arc_max <= nemo_max:
-                        self.result_text.set_text("SUCCESS")
-                        self.result_text.set_color("lime")
-                    else:
-                        self.result_text.set_text("FAIL")
-                        self.result_text.set_color("red")
+                if (elapsed >= tau) {
+                    state = 'DEORBITING';
+                    deorbitStartTime = Date.now();
+                    const v_new = V0 - dV; 
+                    satVx = -v_new; // 반대 방향으로 역추진
+                    satVy = 0;
+                }
+            } 
+            // 감속 및 낙하 중
+            else if (state === 'DEORBITING') {
+                // 현실 시간 2초 초과 시 실패
+                if (now - deorbitStartTime > 2000) {
+                    resultText.innerText = "FAIL (시간 초과 / 궤도 이탈)";
+                    resultText.style.color = "red";
+                    state = 'DONE';
+                }
+
+                // 1프레임당 여러 번 물리 연산 (빠른 시각화)
+                const dt = 2.0; 
+                for (let i = 0; i < 50; i++) {
+                    rk4Step(dt);
+                    const r = Math.hypot(satX, satY);
+
+                    // 대기권 진입 순간 계산
+                    if (r < RE + ATM_H && !enteredAtm) {
+                        enteredAtm = true;
+                        const v_sq = satVx**2 + satVy**2;
+                        const E = v_sq / 2 - MU / r;
+                        const v_entry = Math.sqrt(Math.max(0, 2 * (E + MU / (RE + ATM_H))));
                         
-                    self.state = 'DONE'
-                    break
+                        const h_ang = satX * satVy - satY * satVx;
+                        const v_h = h_ang / (RE + ATM_H);
+                        const ratio = Math.max(-1.0, Math.min(1.0, Math.abs(v_h) / v_entry));
+                        const gamma_entry = Math.max(Math.acos(ratio), 1e-6);
+                        
+                        L_final = SATELLITES[selectedSat].k / Math.sin(gamma_entry);
+                    }
 
-            # 실시간 렌더링 업데이트
-            r_current = np.hypot(self.x, self.y)
-            if self.entered_atm:
-                dtheta
+                    // 지표면(바다) 도달 확인
+                    if (r <= RE) {
+                        let thetaCenter = Math.atan2(satY, satX);
+                        // 각도를 -PI ~ PI 기준으로 보정
+                        if (thetaCenter < 0) thetaCenter += 2 * Math.PI; 
+                        
+                        // 포인트 니모는 PI/2 (아래쪽 중앙)
+                        const targetTheta = Math.PI / 2;
+                        const dTheta = L_final / RE;
+                        const arcMin = thetaCenter - dTheta/2;
+                        const arcMax = thetaCenter + dTheta/2;
+                        
+                        const nemoMin = targetTheta - (R_NEMO / RE);
+                        const nemoMax = targetTheta + (R_NEMO / RE);
+
+                        if (arcMin >= nemoMin && arcMax <= nemoMax) {
+                            resultText.innerText = "SUCCESS";
+                            resultText.style.color = "lime";
+                        } else {
+                            resultText.innerText = "FAIL";
+                            resultText.style.color = "red";
+                        }
+                        state = 'DONE';
+                        break;
+                    }
+                }
+            }
+
+            drawScene();
+            if (state !== 'DONE') {
+                animId = requestAnimationFrame(loop);
+            }
+        }
+
+        // 초기 화면 그리기
+        drawScene();
+    </script>
+</body>
+</html>
