@@ -17,7 +17,7 @@
             <h1 class="text-xl font-bold text-blue-400 flex items-center gap-2">
                 🚀 Nemo Drop
             </h1>
-            <p class="text-xs text-gray-400 mt-1">포인트 니모 통제 낙하 시뮬레이터</p>
+            <p class="text-xs text-gray-400 mt-1">인공위성 낙하 시뮬레이터</p>
         </div>
         
         <hr class="border-gray-800">
@@ -377,7 +377,7 @@
                 if (isTimeoutFail) {
                     resultTitle.innerText = "MISSION FAIL 💥";
                     resultTitle.className = "text-5xl font-black tracking-wider text-red-500";
-                    resultDesc.innerText = "역추진 기동 후 일정 시간이 지났지만 낙하하지 못했습니다! 감속량(Δv)이 너무 낮아 궤도 이탈에 실패했습니다.";
+                    resultDesc.innerText = "역추진 기동 후 일정 시간이 지났지만 낙하하지 못했습니다! 감속량(Δv)이 너무 낮아 대기권 재진입에 실패했습니다.";
                     return;
                 }
 
@@ -392,11 +392,11 @@
                 if (totalArcInside) {
                     resultTitle.innerText = "SUCCESS 🎯";
                     resultTitle.className = "text-5xl font-black tracking-wider text-emerald-400";
-                    resultDesc.innerText = `통제 궤도 이탈 성공! ${currentSat.name}의 파편 호(${(Lfinal/1000).toFixed(0)}km)가 포인트 니모 구역 안에 안전하게 수장되었습니다.`;
+                    resultDesc.innerText = `인공위성 낙하 성공! ${currentSat.name}의 파편 (${(Lfinal/1000).toFixed(0)}km)이 모두 포인트 니모 범위 안에 들어갔습니다.`;
                 } else {
                     resultTitle.innerText = "MISSION FAIL 💥";
                     resultTitle.className = "text-5xl font-black tracking-wider text-red-500";
-                    resultDesc.innerText = `낙하 통제 실패! 대기권에는 진입했으나 파편 범위가 포인트 니모를 벗어났습니다. 감속량(Δv)을 조절해 보세요.`;
+                    resultDesc.innerText = `낙하 통제 실패! 대기권에 진입했으나 파편이 포인트 니모 범위를 벗어났습니다. 감속량(Δv)을 조절해 보세요.`;
                 }
             }
 
