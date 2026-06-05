@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deorbit Simulation</title>
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --panel-bg: #1a2235;
+            --text-color: #e2e8f0;
+            --accent: #4ade80;
+            --danger: #f87171;
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #ui-panel {
+            width: 300px;
+            background-color: var(--panel-bg);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.5);
+            z-index: 10;
+        }
+        h1 { font-size: 1.2rem; margin: 0 0 10px 0; color: #fff; }
+        .control-group { display: flex; flex-direction: column; gap: 8px; }
+        label { font-size: 0.9rem; color: #cbd5e1; }
+        select, input[type="range"] {
+            width: 100%;
+            padding: 8px;
+            background: #2dd4bf;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            color: #0b0f19;
+        }
+        .dv-display { text-align: right; font-weight: bold; font-size: 1.1rem; color: #2dd4bf; }
+        
+        button {
+            padding: 15px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        #btn-start { background-color: var(--accent); color: #000; margin-top: auto; }
+        #btn-start:hover { background-color: #22c55e; }
+        #btn-start:disabled { background-color: #475569; cursor: not-allowed; }
+        
+        #btn-reset { background-color: var(--danger); color: #fff; display: none; margin-top: 10px; }
+        #btn-reset:hover { background-color: #ef4444; }
+
+        #canvas-container {
+            flex-grow: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+        }
+        canvas {
+            max-width: 100%;
+            max-height: 100%;
+            aspect-ratio: 1 / 1;
+            background-color: #000;
+            border-radius: 50%;
+            box-shadow: 0 0 40px rgba(255, 255, 255, 0.05);
+        }
+        #overlay-msg {
+            position: absolute;
+            font-size: 4rem;
+            font-weight: 900;
+            letter-spacing: 5px;
+            text-shadow: 0 0 20px rgba(0,0,0,0.8);
+            display: none;
+            pointer-events: none;
+        }
+        .success { color: #4ade80; }
+        .fail { color: #f87171; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-panel">
+        <h1>위성 디오빗 시뮬레이션</h1>
+        
+        <div class="control-group">
+            <label>대상 위성 선택</label>
+            <select id="sat-select">
+                <option value="sputnik">스푸트니크 1호</option>
+                <option value="mir">미르 우주정거장</option>
+                <option value="iss">국제우주정거장 (ISS)</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label>감속량 (Δv)</label>
+            <input type="range" id="dv-slider" min="10" max="300" value="150" step="1">
+            <div class="dv-display"><span id="dv-value">150</span> m/s</div>
+        </div>
+
+        <button id="btn-start">START</button>
+        <button id="btn-reset">RESET</button>
+    </div>
+
+    <div id="canvas-container">
+        <canvas id="sim-canvas" width="800" height="800"></canvas>
+        <div id="overlay-msg"></div>
+    </div>
+
+    <script>
+        // 상수 및 물리량
+        const Re = 6378000; // 지구 반지름 (m)
+        const mu = 3.986e14; // 중력 상수
+        const H_atm_phys = 100000; // 물리적 대기권 진입 기준 고도 (100km)
+        const R_nemo = 2688000; // 포인트 니모 반경
+        const theta_nemo = Math.PI / 2; // 화면 아래쪽 90도 (Canvas 기준)
+        const dTheta_nemo = (2 * R_nemo) / Re; // 니모 호의 각도 범위
+        const SIM_SPEED = 1600; // 1초 = 1600 가상 초 (빠른 시뮬레이션 위함)
+
+        // 위성 데이터셋
+        const satellites = {
+            sputnik: { m0: 83.6, A: 0.26, Cd: 2.1, tau: 1, k: 5000, h0: 477000, startTheta: theta_nemo - Math.PI },
+            mir:     { m0: 130000, A: 350, Cd: 2.3, tau: 2, k: 150000, h0: 290000, startTheta: theta_nemo - Math.PI/2 },
+            iss:     { m0: 450000, A: 2200, Cd: 2.6, tau: 3, k: 400000, h0: 320000, startTheta: theta_nemo - Math.PI/2 }
+        };
+
+        // 전역 상태
+        let currentSat = null;
+        let state = 'IDLE'; // IDLE, ORBITING, DEORBITING, DONE
+        let startTime = 0;
+        let deorbitStartTime = 0;
+        let initAngle = 0;
+        let phys = { x: 0, y: 0, vx: 0, vy: 0 };
+        let fragmented = false;
+        let L_final = 0;
+
+        // DOM 요소
+        const canvas = document.getElementById('sim-canvas');
+        const ctx = canvas.getContext('2d');
+        const selectSat = document.getElementById('sat-select');
+        const sliderDv = document.getElementById('dv-slider');
+        const textDv = document.getElementById('dv-value');
+        const btnStart = document.getElementById('btn-start');
+        const btnReset = document.getElementById('btn-reset');
+        const overlayMsg = document.getElementById('overlay-msg');
+
+        // 스케일 매핑 함수 (물리적 거리 -> 화면 픽셀)
+        // 요구사항: 대기권 시각적 두께는 지구 반지름의 1/5
+        const R_screen = 180; 
+        const H_atm_screen = R_screen / 5;
+        function getVisualRadius(r_phys) {
+            if (r_phys <= Re) {
+                return (r_phys / Re) * R_screen;
+            } else if (r_phys <= Re + H_atm_phys) {
+                return R_screen + ((r_phys - Re) / H_atm_phys) * H_atm_screen;
+            } else {
+                const excess = r_phys - (Re + H_atm_phys);
+                return R_screen + H_atm_screen + (excess / 477000) * 80;
+            }
+        }
+
+        // 초기화
+        function init() {
+            currentSat = satellites[selectSat.value];
+            state = 'IDLE';
+            fragmented = false;
+            L_final = 0;
+            overlayMsg.style.display = 'none';
+            btnStart.disabled = false;
+            btnReset.style.display = 'none';
+            selectSat.disabled = false;
+            sliderDv.disabled = false;
+            
+            // 역산: 목표 시간에 Deorbit 지점(startTheta)에 도달하기 위한 시작 각도 계산
+            let r0 = Re + H_atm_phys + currentSat.h0;
+            let v0 = Math.sqrt(mu / r0);
+            let omega = v0 / r0;
+            let sweepAngle = omega * (currentSat.tau * SIM_SPEED);
+            initAngle = currentSat.startTheta - sweepAngle;
+
+            drawStatic(initAngle);
+        }
+
+        function drawStatic(angle) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const cx = canvas.width / 2;
+            const cy = canvas.height / 2;
+
+            // 지구
+            ctx.beginPath();
+            ctx.arc(cx, cy, R_screen, 0, Math.PI * 2);
+            ctx.fillStyle = '#1e3a8a';
+            ctx.fill();
+
+            // 포인트 니모
+            ctx.beginPath();
+            ctx.arc(cx, cy, R_screen, theta_nemo - dTheta_nemo/2, theta_nemo + dTheta_nemo/2);
+            ctx.strokeStyle = '#ef4444';
+            ctx.lineWidth = 8;
+            ctx.stroke();
+
+            // 대기권 시각적 경계선
+            ctx.beginPath();
+            ctx.arc(cx, cy, R_screen + H_atm_screen, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(125, 211, 252, 0.2)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            // 위성
+            let r0 = Re + H_atm_phys + currentSat.h0;
+            let r_vis = getVisualRadius(r0);
+            ctx.beginPath();
+            ctx.arc(cx + r_vis * Math.cos(angle), cy + r_vis * Math.sin(angle), 4, 0, Math.PI*2);
+            ctx.fillStyle = '#fff';
+            ctx.fill();
+        }
+
+        // 렌더링 및 물리 루프
+        function loop(timestamp) {
+            if (state === 'IDLE' || state === 'DONE') return;
+
+            let now = performance.now();
+            const cx = canvas.width / 2;
+            const cy = canvas.height / 2;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // 환경 그리기
+            ctx.beginPath();
+            ctx.arc(cx, cy, R_screen, 0, Math.PI * 2);
+            ctx.fillStyle = '#1e3a8a';
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(cx, cy, R_screen, theta_nemo - dTheta_nemo/2, theta_nemo + dTheta_nemo/2);
+            ctx.strokeStyle = '#ef4444';
+            ctx.lineWidth = 8;
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(cx, cy, R_screen + H_atm_screen, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(125, 211, 252, 0.2)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            let r0 = Re + H_atm_phys + currentSat.h0;
+            let v0 = Math.sqrt(mu / r0);
+            let omega = v0 / r0;
+
+            if (state === 'ORBITING') {
+                let elapsedReal = (now - startTime) / 1000;
+                let currentAngle = initAngle + omega * (elapsedReal * SIM_SPEED);
+                
+                // 가상 수명(tau) 도달 시 Deorbit 전환
+                if (elapsedReal >= currentSat.tau) {
+                    state = 'DEORBITING';
+                    deorbitStartTime = now;
+                    let dv = parseFloat(sliderDv.value);
+                    let targetV = v0 - dv;
+                    // 위치와 속도 벡터 초기화 (진행방향 접선)
+                    phys.x = r0 * Math.cos(currentSat.startTheta);
+                    phys.y = r0 * Math.sin(currentSat.startTheta);
+                    phys.vx = targetV * (-Math.sin(currentSat.startTheta));
+                    phys.vy = targetV * Math.cos(currentSat.startTheta);
+                } else {
+                    let r_vis = getVisualRadius(r0);
+                    ctx.beginPath();
+                    ctx.arc(cx + r_vis * Math.cos(currentAngle), cy + r_vis * Math.sin(currentAngle), 4, 0, Math.PI*2);
+                    ctx.fillStyle = '#fff';
+                    ctx.fill();
+                }
+            }
+            
+            if (state === 'DEORBITING') {
+                // 시간 초과 체크 (2초)
+                if (now - deorbitStartTime > 2000) {
+                    endGame("FAIL", "fail");
+                    return;
+                }
+
+                // Sub-stepping 오일러 적분
+                let dt = (1 / 60) * SIM_SPEED;
+                let subSteps = 100;
+                let sdt = dt / subSteps;
+                let hitEarth = false;
+
+                for (let i = 0; i < subSteps; i++) {
+                    let r_phys = Math.sqrt(phys.x*phys.x + phys.y*phys.y);
+                    if (r_phys <= Re) { hitEarth = true; break; }
+
+                    let v_sq = phys.vx*phys.vx + phys.vy*phys.vy;
+                    let v_mag = Math.sqrt(v_sq);
+
+                    let ag = -mu / (r_phys * r_phys);
+                    let ax = ag * (phys.x / r_phys);
+                    let ay = ag * (phys.y / r_phys);
+
+                    // 대기권 진입 시 항력 적용
+                    if (r_phys < Re + H_atm_phys) {
+                        let h = r_phys - Re;
+                        let rho = 1.225 * Math.exp(-h / 7500);
+                        let ad = 0.5 * rho * v_sq * (currentSat.Cd * currentSat.A / currentSat.m0);
+                        ax -= ad * (phys.vx / v_mag);
+                        ay -= ad * (phys.vy / v_mag);
+
+                        // 최초 진입 시 파편화 계산
+                        if (!fragmented) {
+                            fragmented = true;
+                            let dot = phys.vx * (-phys.x/r_phys) + phys.vy * (-phys.y/r_phys);
+                            let sinGamma = dot / v_mag;
+                            if (sinGamma < 0.001) sinGamma = 0.001;
+                            L_final = currentSat.k / sinGamma;
+                        }
+                    }
+
+                    phys.vx += ax * sdt;
+                    phys.vy += ay * sdt;
+                    phys.x += phys.vx * sdt;
+                    phys.y += phys.vy * sdt;
+                }
+
+                let r_vis = getVisualRadius(Math.sqrt(phys.x*phys.x + phys.y*phys.y));
+                let theta = Math.atan2(phys.y, phys.x);
+
+                if (!fragmented) {
+                    ctx.beginPath();
+                    ctx.arc(cx + r_vis*Math.cos(theta), cy + r_vis*Math.sin(theta), 4, 0, Math.PI*2);
+                    ctx.fillStyle = '#fff';
+                    ctx.fill();
+                } else {
+                    let dThetaFrag = Math.min(L_final / Re, Math.PI*2);
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, r_vis, theta - dThetaFrag/2, theta + dThetaFrag/2);
+                    ctx.strokeStyle = '#fb923c';
+                    ctx.lineWidth = 5;
+                    ctx.stroke();
+                }
+
+                if (hitEarth) {
+                    checkSuccess(theta);
+                    return;
+                }
+            }
+
+            requestAnimationFrame(loop);
+        }
+
+        // 판정 로직
+        function checkSuccess(hitTheta) {
+            let dThetaFrag = L_final / Re;
+            let fragMin = hitTheta - dThetaFrag/2;
+            let fragMax = hitTheta + dThetaFrag/2;
+            
+            // 각도 정규화 (-PI ~ PI 기준)
+            function normalize(angle) {
+                let a = (angle - theta_nemo) % (Math.PI * 2);
+                if (a > Math.PI) a -= Math.PI * 2;
+                if (a < -Math.PI) a += Math.PI * 2;
+                return a;
+            }
+
+            let nMin = normalize(fragMin);
+            let nMax = normalize(fragMax);
+
+            if (nMin > nMax) { let temp = nMin; nMin = nMax; nMax = temp; }
+
+            let nemoHalf = dTheta_nemo / 2;
+            if (nMin >= -nemoHalf && nMax <= nemoHalf) {
+                endGame("SUCCESS", "success");
+            } else {
+                endGame("FAIL", "fail");
+            }
+        }
+
+        function endGame(msg, className) {
+            state = 'DONE';
+            overlayMsg.innerText = msg;
+            overlayMsg.className = className;
+            overlayMsg.style.display = 'block';
+            setTimeout(() => { btnReset.style.display = 'block'; }, 2000);
+        }
+
+        // 이벤트 리스너
+        sliderDv.addEventListener('input', (e) => {
+            textDv.innerText = e.target.value;
+        });
+
+        selectSat.addEventListener('change', init);
+
+        btnStart.addEventListener('click', () => {
+            state = 'ORBITING';
+            startTime = performance.now();
+            btnStart.disabled = true;
+            selectSat.disabled = true;
+            sliderDv.disabled = true;
+            requestAnimationFrame(loop);
+        });
+
+        btnReset.addEventListener('click', init);
+
+        // 초기 실행
+        init();
+    </script>
+</body>
+</html>
