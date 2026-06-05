@@ -297,7 +297,7 @@
 
                         if (simState === "DEORBIT") {
                             deorbitTime += dt;
-                            if (deorbitTime >= 5000) {
+                            if (deorbitTime >= 3500) {
                                 simState = "FINISHED";
                                 isTimeoutFail = true;
                                 evaluateMissionResult();
