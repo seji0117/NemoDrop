@@ -32,6 +32,7 @@
         </div>
 
         <div class="bg-gray-950 rounded-lg p-3 border border-gray-800 text-xs flex flex-col gap-1.5">
+            <div class="flex justify-between"><span class="text-gray-400">초기 궤도 (대기권 기준):</span><span id="specAlt" class="font-mono text-purple-400">-</span></div>
             <div class="flex justify-between"><span class="text-gray-400">초기 질량 (m₀):</span><span id="specMass" class="font-mono text-blue-300">-</span></div>
             <div class="flex justify-between"><span class="text-gray-400">투영 단면적 (A):</span><span id="specArea" class="font-mono text-blue-300">-</span></div>
             <div class="flex justify-between"><span class="text-gray-400">항력 계수 (Cd):</span><span id="specCd" class="font-mono text-blue-300">-</span></div>
@@ -79,26 +80,28 @@
     </div>
 
     <script>
-        // HTML 문서가 완전히 로드된 후 자바스크립트가 안전하게 실행되도록 보호
         document.addEventListener('DOMContentLoaded', () => {
             
             // 1. 물리 정수 선언
             const mu = 3.986e14;
             const Re = 6378000;
-            const h0 = 400000;
-            const r0 = Re + h0;
-            const v0 = Math.sqrt(mu / r0);
-            const Rnemo = 2688000;
+            const atmThickness = 100000; // 실제 물리적 대기권 두께 (100km 카르만 선)
+            
+            // 시각적 렌더링 스케일 (실제 비율이 아닌 시각적 과장 비율 적용)
+            const visRe = 150; // 캔버스 상 지구 반지름 픽셀
+            const visAtmThickness = visRe / 5; // 조건: 지구 반지름은 그래픽상 대기권 두께의 5배
+            const visAtmBound = visRe + visAtmThickness; // 캔버스 상 대기권 경계
 
+            const Rnemo = 2688000;
             const thetaNemo = Math.PI / 2;
             const thetaAntipode = 3 * Math.PI / 2;
             const nemoHalfAngle = Rnemo / Re;
 
-            // 2. 위성 데이터셋
+            // 2. 위성 데이터셋 (h_atm: 대기권으로부터 잰 고도 추가)
             const satellites = {
-                sputnik: { name: "스푸트니크 1호", m0: 83.6, A: 0.26, Cd: 2.1, life: 1, k_break: 5000 },
-                mir: { name: "미르 우주정거장", m0: 130000, A: 350, Cd: 2.3, life: 2, k_break: 150000 },
-                iss: { name: "국제우주정거장", m0: 450000, A: 2200, Cd: 2.6, life: 3, k_break: 400000 }
+                sputnik: { name: "스푸트니크 1호", m0: 83.6, A: 0.26, Cd: 2.1, life: 1, k_break: 5000, h_atm: 477000 },
+                mir: { name: "미르 우주정거장", m0: 130000, A: 350, Cd: 2.3, life: 2, k_break: 150000, h_atm: 290000 },
+                iss: { name: "국제우주정거장", m0: 450000, A: 2200, Cd: 2.6, life: 3, k_break: 400000, h_atm: 320000 }
             };
 
             // 3. UI 요소 매핑
@@ -121,11 +124,11 @@
             const canvas = document.getElementById('simCanvas');
             const ctx = canvas.getContext('2d');
             const cx = 400, cy = 400; 
-            const scale = 230 / r0;   
 
             // 4. 시뮬레이션 동적 상태 변수
             let currentSat;
             let dv = 150;
+            let r0, v0; // 선택 위성에 따라 가변 적용될 초기 물리량
             let simState = "IDLE"; 
             let simTime = 0;
             let deorbitTime = 0;
@@ -137,12 +140,31 @@
             let firstAtmosphereIn = true;
             let isTimeoutFail = false;
 
+            // ★ 렌더링용 변환 함수: 물리적 거리(r)를 캔버스 픽셀(시각적 스케일)로 변환
+            function getVisR(physicalR) {
+                let h = physicalR - Re; // 지표면으로부터의 물리적 고도
+                if (h <= 0) {
+                    return (physicalR / Re) * visRe; // 지표면 내부
+                } else if (h <= atmThickness) {
+                    // 대기권 내부 구간 (실제 100km -> 시각적 30px)
+                    return visRe + (h / atmThickness) * visAtmThickness;
+                } else {
+                    // 대기권 밖 우주 구간 (최대치인 477,000m를 시각적으로 적절히 분배)
+                    let spaceH = h - atmThickness;
+                    return visAtmBound + (spaceH / 477000) * 120; // 스푸트니크 궤도가 대략 300px 위치에 오도록
+                }
+            }
+
             // 5. 초기 화면 빌드 및 데이터 갱신
             function updateSpecs() {
-                // 안전장치: satSelect 값이 없으면 sputnik을 기본값으로 사용
                 let satKey = satSelect.value || "sputnik";
                 currentSat = satellites[satKey];
                 
+                // 선택한 위성에 맞춰 초기 궤도(r0) 및 속도(v0) 동적 할당
+                r0 = Re + atmThickness + currentSat.h_atm;
+                v0 = Math.sqrt(mu / r0);
+                
+                document.getElementById('specAlt').innerText = (currentSat.h_atm / 1000).toLocaleString() + " km";
                 document.getElementById('specMass').innerText = currentSat.m0.toLocaleString() + " kg";
                 document.getElementById('specArea').innerText = currentSat.A + " m²";
                 document.getElementById('specCd').innerText = currentSat.Cd;
@@ -163,24 +185,25 @@
             function drawScene() {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+                // 배경 그리드 망
                 ctx.strokeStyle = 'rgba(31, 41, 55, 0.4)';
                 ctx.lineWidth = 1;
                 for(let r = 100; r <= 350; r += 50) {
                     ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2*Math.PI); ctx.stroke();
                 }
 
-                // [1. 지구 렌더링]
+                // [1. 지구 렌더링 - 물리 연산과 무관하게 지정된 시각적 크기(visRe) 적용]
                 ctx.beginPath();
-                ctx.arc(cx, cy, Re * scale, 0, 2 * Math.PI);
+                ctx.arc(cx, cy, visRe, 0, 2 * Math.PI);
                 ctx.fillStyle = '#1e293b';
                 ctx.fill();
                 ctx.strokeStyle = '#334155';
                 ctx.lineWidth = 2;
                 ctx.stroke();
 
-                // [2. 대기권 렌더링]
+                // [2. 대기권 렌더링 - 지구의 1/5 두께(visAtmBound)로 시각적 과장]
                 ctx.beginPath();
-                ctx.arc(cx, cy, (Re + 100000) * scale, 0, 2 * Math.PI);
+                ctx.arc(cx, cy, visAtmBound, 0, 2 * Math.PI);
                 ctx.fillStyle = 'rgba(56, 189, 248, 0.04)';
                 ctx.fill();
                 ctx.strokeStyle = 'rgba(56, 189, 248, 0.25)';
@@ -189,9 +212,9 @@
                 ctx.stroke();
                 ctx.setLineDash([]);
 
-                // [3. 합격 구역]
+                // [3. 합격 구역 (포인트 니모)]
                 ctx.beginPath();
-                ctx.arc(cx, cy, Re * scale, thetaNemo - nemoHalfAngle, thetaNemo + nemoHalfAngle);
+                ctx.arc(cx, cy, visRe, thetaNemo - nemoHalfAngle, thetaNemo + nemoHalfAngle);
                 ctx.strokeStyle = '#10b981'; 
                 ctx.lineWidth = 6;
                 ctx.stroke();
@@ -199,18 +222,19 @@
                 ctx.fillStyle = '#10b981';
                 ctx.font = '10px sans-serif';
                 ctx.textAlign = 'center';
-                ctx.fillText("📍 POINT NEMO", cx, cy + (Re * scale) + 18);
+                ctx.fillText("📍 POINT NEMO", cx, cy + visRe + 18);
 
                 // [4. 위성 상태별 그리기]
                 if (simState === "IDLE") {
+                    let visR0 = getVisR(r0);
                     ctx.beginPath();
-                    ctx.arc(cx, cy, r0 * scale, 0, 2 * Math.PI);
+                    ctx.arc(cx, cy, visR0, 0, 2 * Math.PI);
                     ctx.strokeStyle = 'rgba(59, 130, 246, 0.2)';
                     ctx.lineWidth = 1;
                     ctx.stroke();
 
-                    let sx = cx + r0 * scale * Math.cos(thetaAntipode);
-                    let sy = cy + r0 * scale * Math.sin(thetaAntipode);
+                    let sx = cx + visR0 * Math.cos(thetaAntipode);
+                    let sy = cy + visR0 * Math.sin(thetaAntipode);
                     ctx.fillStyle = '#ef4444';
                     ctx.beginPath(); ctx.arc(sx, sy, 4, 0, 2*Math.PI); ctx.fill();
                     ctx.font = '10px sans-serif';
@@ -219,17 +243,21 @@
                 
                 if (simState === "ORBITING" || simState === "DEORBIT" || simState === "ATMOSPHERE") {
                     let curR = Math.sqrt(px*px + py*py);
+                    let visCurR = getVisR(curR); // 물리 좌표를 캔버스 픽셀로 치환
+
+                    let centerTheta = Math.atan2(py, px);
 
                     if (simState === "ATMOSPHERE") {
-                        let centerTheta = Math.atan2(py, px);
                         ctx.beginPath();
-                        ctx.arc(cx, cy, curR * scale, centerTheta - arcSpanAngle/2, centerTheta + arcSpanAngle/2);
+                        ctx.arc(cx, cy, visCurR, centerTheta - arcSpanAngle/2, centerTheta + arcSpanAngle/2);
                         ctx.strokeStyle = '#ef4444';
                         ctx.lineWidth = 4;
                         ctx.stroke();
                     } else {
+                        let drawPx = cx + visCurR * Math.cos(centerTheta);
+                        let drawPy = cy + visCurR * Math.sin(centerTheta);
                         ctx.beginPath();
-                        ctx.arc(cx + px * scale, cy + py * scale, 5, 0, 2 * Math.PI);
+                        ctx.arc(drawPx, drawPy, 5, 0, 2 * Math.PI);
                         ctx.fillStyle = simState === "DEORBIT" ? '#f59e0b' : '#3b82f6';
                         ctx.fill();
                     }
@@ -269,7 +297,6 @@
 
                         if (simState === "DEORBIT") {
                             deorbitTime += dt;
-                            // 물리 엔진 기준 약 3500초(현실 체감 3~4초)가 지나도 낙하 못하면 실패
                             if (deorbitTime >= 3500) {
                                 simState = "FINISHED";
                                 isTimeoutFail = true;
@@ -289,7 +316,7 @@
                         let ax = -ga * (px / r);
                         let ay = -ga * (py / r);
 
-                        if (h <= 100000) {
+                        if (h <= atmThickness) { // 고도 100km(대기권) 진입 시
                             simState = "ATMOSPHERE";
                             
                             if (firstAtmosphereIn) {
@@ -422,7 +449,7 @@
             }
             requestAnimationFrame(mainLoop);
 
-        }); // DOMContentLoaded 끝
+        });
     </script>
 </body>
 </html>
