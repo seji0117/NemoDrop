@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Satellite Deorbit Simulation</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { 
+            display: flex; 
+            height: 100vh; 
+            background-color: #050505; 
+            color: #ffffff; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+        }
+
+        /* 좌측 UI 패널 */
+        #ui-panel {
+            width: 320px;
+            background-color: #1a1a24;
+            padding: 30px 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 25px;
+            border-right: 1px solid #333;
+            z-index: 10;
+        }
+        h2 { font-size: 1.2rem; color: #00ffcc; text-align: center; margin-bottom: 10px; }
+        .control-group { display: flex; flex-direction: column; gap: 10px; }
+        label { font-size: 0.9rem; color: #ccc; }
+        
+        .radio-group { display: flex; flex-direction: column; gap: 8px; }
+        .radio-label {
+            display: flex; align-items: center; gap: 8px;
+            background: #2a2a35; padding: 10px; border-radius: 6px; cursor: pointer;
+            transition: background 0.2s;
+        }
+        .radio-label:hover { background: #353545; }
+        
+        input[type="range"] { width: 100%; cursor: pointer; }
+        .slider-val { font-weight: bold; color: #00ffcc; font-size: 1.1rem; text-align: right; }
+
+        button {
+            padding: 12px; font-size: 1rem; font-weight: bold; border: none; border-radius: 6px;
+            cursor: pointer; transition: transform 0.1s, background 0.2s;
+        }
+        #btn-start { background-color: #00ffcc; color: #000; }
+        #btn-start:hover { background-color: #00ccaa; }
+        #btn-start:active { transform: scale(0.98); }
+        
+        #btn-reset { 
+            background-color: #ff3366; color: #fff; 
+            display: none; 
+        }
+        #btn-reset:hover { background-color: #cc2952; }
+
+        /* 우측 시뮬레이션 캔버스 영역 */
+        #canvas-container {
+            flex: 1;
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        canvas {
+            display: block;
+        }
+
+        /* 결과 오버레이 */
+        #result-overlay {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 5rem;
+            font-weight: 900;
+            letter-spacing: 5px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            text-shadow: 0 0 20px rgba(0,0,0,0.8);
+        }
+        .success { color: #00ffcc; }
+        .fail { color: #ff3366; }
+        .show { opacity: 1 !important; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-panel">
+        <h2>위성 낙하 시뮬레이션</h2>
+        
+        <div class="control-group">
+            <label>대상 위성 선택</label>
+            <div class="radio-group">
+                <label class="radio-label">
+                    <input type="radio" name="satellite" value="sputnik" checked>
+                    스푸트니크 1호
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="satellite" value="mir">
+                    미르 우주정거장
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="satellite" value="iss">
+                    국제우주정거장 (ISS)
+                </label>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label>감속량 (Δv)</label>
+            <input type="range" id="dv-slider" min="10" max="300" value="150" step="1">
+            <div class="slider-val"><span id="dv-display">150</span> m/s</div>
+        </div>
+
+        <button id="btn-start">시작 (Start)</button>
+        <button id="btn-reset">리셋 (Reset)</button>
+    </div>
+
+    <div id="canvas-container">
+        <canvas id="simCanvas"></canvas>
+        <div id="result-overlay"></div>
+    </div>
+
+    <script>
+        // --- 물리 상수 및 위성 제원 ---
+        const MU = 3.986e14;
+        const R_EARTH = 6378000;
+        const H_ATM = 100000; 
+        const RHO_0 = 1.225;
+        const H_SCALE = 7500;
+        
+        const NEMO_RADIUS = 2688000;
+        const NEMO_ANGLE = NEMO_RADIUS / R_EARTH; // 약 0.421 rad (합격 반경 범위)
+
+        // 대기권 기준 고도(h) 세팅 완료
+        const SATELLITES = {
+            sputnik: { m: 83.6, A: 0.26, Cd: 2.1, life: 1, k: 5000, h: 477000 },
+            mir: { m: 130000, A: 350, Cd: 2.3, life: 2, k: 150000, h: 290000 },
+            iss: { m: 450000, A: 2200, Cd: 2.6, life: 3, k: 400000, h: 320000 }
+        };
+
+        // --- 시각화 스케일 ---
+        const VIS_R_EARTH = 150; 
+        const VIS_R_ATM = VIS_R_EARTH + 30; // 100km 고도가 시각적으로 30px 두께를 가짐
+
+        // --- DOM Elements ---
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        const dvSlider = document.getElementById('dv-slider');
+        const dvDisplay = document.getElementById('dv-display');
+        const btnStart = document.getElementById('btn-start');
+        const btnReset = document.getElementById('btn-reset');
+        const resultOverlay = document.getElementById('result-overlay');
+        const satRadios = document.getElementsByName('satellite');
+
+        // --- 시뮬레이션 상태 변수 ---
+        let width, height, cx, cy;
+        let animationId = null;
+        let phase = 'idle'; // 'idle', 'orbit', 'deorbit', 'done'
+        
+        let activeSat = null;
+        let dv = 150;
+        
+        let orbitStartTime = 0;
+        
+        // 물리 좌표계 상태
+        let state = { x: 0, y: 0, vx: 0, vy: 0 };
+        let enteredAtmosphere = false;
+        let finalL_angle = 0;
+        let pathHistory = [];
+
+        function resize() {
+            width = canvas.parentElement.clientWidth;
+            height = canvas.parentElement.clientHeight;
+            canvas.width = width;
+            canvas.height = height;
+            cx = width / 2;
+            cy = height / 2;
+            drawStatic();
+        }
+        window.addEventListener('resize', resize);
+
+        dvSlider.addEventListener('input', (e) => {
+            dv = parseInt(e.target.value);
+            dvDisplay.innerText = dv;
+        });
+
+        btnStart.addEventListener('click', startSimulation);
+        btnReset.addEventListener('click', resetSimulation);
+
+        function getSelectedSat() {
+            let selected = 'sputnik';
+            satRadios.forEach(r => { if(r.checked) selected = r.value; });
+            return SATELLITES[selected];
+        }
+
+        function startSimulation() {
+            if (phase !== 'idle') return;
+            activeSat = getSelectedSat();
+            phase = 'orbit';
+            orbitStartTime = performance.now();
+            
+            btnStart.disabled = true;
+            dvSlider.disabled = true;
+            satRadios.forEach(r => r.disabled = true);
+            
+            if (!animationId) loop();
+        }
+
+        function triggerDeorbit() {
+            phase = 'deorbit';
+            enteredAtmosphere = false;
+            finalL_angle = 0;
+            pathHistory = [];
+            
+            // 대기권 기준 고도를 더해 초기 원궤도 반지름 계산
+            const r0 = R_EARTH + H_ATM + activeSat.h;
+            const v0 = Math.sqrt(MU / r0);
+            
+            // 시작 지점: 포인트 니모의 정반대편인 위쪽 (x: 0, y: -r0)
+            state.x = 0;
+            state.y = -r0;
+            state.vx = v0 - dv; // 수평 역추진 감속
+            state.vy = 0;
+        }
+
+        function showResult(isSuccess) {
+            phase = 'done';
+            resultOverlay.innerText = isSuccess ? "SUCCESS" : "FAIL";
+            resultOverlay.className = isSuccess ? "success show" : "fail show";
+            
+            setTimeout(() => {
+                btnReset.style.display = 'block';
+            }, 1000);
+        }
+
+        function resetSimulation() {
+            cancelAnimationFrame(animationId);
+            animationId = null;
+            phase = 'idle';
+            
+            btnStart.disabled = false;
+            dvSlider.disabled = false;
+            satRadios.forEach(r => r.disabled = false);
+            btnReset.style.display = 'none';
+            resultOverlay.className = '';
+            
+            drawStatic();
+        }
+
+        // 물리적 고도를 화면 픽셀 반경으로 비례 변환하는 함수
+        function getVisualRadius(r_phys) {
+            if (r_phys <= R_EARTH) return VIS_R_EARTH;
+            const h = r_phys - R_EARTH;
+            return VIS_R_EARTH + h * (30 / H_ATM); 
+        }
+
+        function drawStatic() {
+            ctx.clearRect(0, 0, width, height);
+            
+            // 1. 지구 그리기
+            ctx.beginPath();
+            ctx.arc(cx, cy, VIS_R_EARTH, 0, Math.PI * 2);
+            ctx.fillStyle = '#1E3F66';
+            ctx.fill();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#4A90E2';
+            ctx.stroke();
+
+            // 2. 대기권 경계선 (100km)
+            ctx.beginPath();
+            ctx.arc(cx, cy, VIS_R_ATM, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(74, 144, 226, 0.3)';
+            ctx.setLineDash([5, 5]);
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // 3. 포인트 니모 목표 범위 (지구 아래쪽 중심축 기준 양옆 범위)
+            ctx.beginPath();
+            ctx.arc(cx, cy, VIS_R_EARTH, Math.PI/2 - NEMO_ANGLE, Math.PI/2 + NEMO_ANGLE);
+            ctx.strokeStyle = '#00FFCC';
+            ctx.lineWidth = 6;
+            ctx.stroke();
+        }
+
+        // --- 메인 루프 ---
+        function loop() {
+            if (phase === 'idle' || phase === 'done') return;
+            
+            drawStatic();
+            const now = performance.now();
+
+            if (phase === 'orbit') {
+                const elapsedRealSec = (now - orbitStartTime) / 1000;
+                const targetTime = activeSat.life;
+                
+                // 지정된 타이머 시간에 정확히 12시 방향(역추진 지점)에 도달하도록 각속도 역산
+                const visualOmega = Math.PI / 2; 
+                const currentAngle = -Math.PI/2 - visualOmega * (targetTime - elapsedRealSec);
+                
+                const r0 = R_EARTH + H_ATM + activeSat.h;
+                const rv = getVisualRadius(r0);
+                
+                ctx.beginPath();
+                ctx.arc(cx + rv * Math.cos(currentAngle), cy + rv * Math.sin(currentAngle), 5, 0, Math.PI*2);
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fill();
+
+                if (elapsedRealSec >= targetTime) {
+                    triggerDeorbit();
+                }
+            } 
+            else if (phase === 'deorbit') {
+                // 실시간 물리 연산 정밀화 (오류 해결을 위한 시간 간격 밸런싱)
+                const dt = 1.0; 
+                const steps = 150; // 한 프레임당 계산 속도를 높여 추락까지 지연 현상 해결
+                let crashed = false;
+
+                for (let i = 0; i < steps; i++) {
+                    const r = Math.sqrt(state.x**2 + state.y**2);
+                    const v = Math.sqrt(state.vx**2 + state.vy**2);
+                    const h = r - R_EARTH;
+
+                    // 대기권 진입 판정 및 파편 호의 길이 즉시 고정 확정
+                    if (h <= H_ATM && !enteredAtmosphere) {
+                        enteredAtmosphere = true;
+                        
+                        // 기하학 기반 정밀 진입각 계산
+                        const vr = (state.x * state.vx + state.y * state.vy) / r;
+                        let sinGamma = Math.abs(vr) / v;
+                        if (sinGamma < 0.01) sinGamma = 0.01; 
+
+                        // 대기권 진입 순간 최종 파편 각도 고정
+                        const L_final = activeSat.k / sinGamma;
+                        finalL_angle = L_final / R_EARTH; 
+                    }
+
+                    // 중력 가속도 연산
+                    let ax = -MU * state.x / (r**3);
+                    let ay = -MU * state.y / (r**3);
+
+                    // 대기권 항력 가속도 물리 연산
+                    if (h <= H_ATM) {
+                        const rho = RHO_0 * Math.exp(-h / H_SCALE);
+                        const ad = 0.5 * rho * v * v * (activeSat.Cd * activeSat.A / activeSat.m);
+                        if (v > 0) {
+                            ax -= ad * (state.vx / v);
+                            ay -= ad * (state.vy / v);
+                        }
+                    }
+
+                    state.vx += ax * dt;
+                    state.vy += ay * dt;
+                    state.x += state.vx * dt;
+                    state.y += state.vy * dt;
+
+                    // 실시간 위치 궤적 버퍼 기록
+                    if (i % 5 === 0) {
+                        const curR = Math.sqrt(state.x**2 + state.y**2);
+                        const curTheta = Math.atan2(state.y, state.x);
+                        const curRv = getVisualRadius(curR);
+                        pathHistory.push({
+                            x: cx + curRv * Math.cos(curTheta),
+                            y: cy + curRv * Math.sin(curTheta)
+                        });
+                    }
+
+                    // 지표면 충돌 판정
+                    if (r <= R_EARTH) {
+                        crashed = true;
+                        break;
+                    }
+                }
+
+                // 궤적 선 그리기
+                if (pathHistory.length > 1) {
+                    ctx.beginPath();
+                    ctx.moveTo(pathHistory[0].x, pathHistory[0].y);
+                    for (let i = 1; i < pathHistory.length; i++) {
+                        ctx.lineTo(pathHistory[i].x, pathHistory[i].y);
+                    }
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+                    ctx.lineWidth = 1.5;
+                    ctx.stroke();
+                }
+
+                // 현재 위성 혹은 파편 호 그리기
+                const r = Math.sqrt(state.x**2 + state.y**2);
+                const currentTheta = Math.atan2(state.y, state.x);
+                const rv = getVisualRadius(r);
+
+                if (enteredAtmosphere) {
+                    // 고정된 파편 호의 길이 형태를 유지하며 낙하 시각화
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, rv, currentTheta - finalL_angle/2, currentTheta + finalL_angle/2);
+                    ctx.strokeStyle = '#FF3366';
+                    ctx.lineWidth = 4;
+                    ctx.stroke();
+                } else {
+                    ctx.beginPath();
+                    ctx.arc(cx + rv * Math.cos(currentTheta), cy + rv * Math.sin(currentTheta), 4, 0, Math.PI*2);
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.fill();
+                }
+
+                // 추락 완료 시 최종 범위 판정 로직
+                if (crashed) {
+                    let deltaTheta = currentTheta - Math.PI/2;
+                    while (deltaTheta > Math.PI) deltaTheta -= 2*Math.PI;
+                    while (deltaTheta < -Math.PI) deltaTheta += 2*Math.PI;
+                    
+                    // 파편 호 전체(양 끝단)가 포인트 니모 구역 범위 각도 내부인지 검사
+                    const isInside = (Math.abs(deltaTheta) + finalL_angle/2) <= NEMO_ANGLE;
+                    showResult(isInside);
+                    return;
+                }
+
+                // 감속 부족으로 아예 지구를 비껴가 탈출하는 궤도 예외 처리
+                const currentH = r - R_EARTH;
+                if (currentH > H_ATM * 10 && pathHistory.length > 100) {
+                    showResult(false);
+                    return;
+                }
+            }
+
+            animationId = requestAnimationFrame(loop);
+        }
+
+        // 초기 실행
+        resize();
+    </script>
+</body>
+</html>
