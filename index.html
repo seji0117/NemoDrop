@@ -3,133 +3,62 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Deorbit Simulation: Point Nemo</title>
+    <title>Satellite Deorbit Simulation</title>
     <style>
-        :root {
-            --bg-dark: #0a0c10;
-            --panel-bg: #161b22;
-            --text-main: #c9d1d9;
-            --accent: #58a6ff;
-            --success: #3fb950;
-            --fail: #f85149;
-            --arc-color: #ff7b72;
-        }
-        body, html {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            background-color: var(--bg-dark);
-            color: var(--text-main);
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { 
+            display: flex; 
+            height: 100vh; 
+            background-color: #050505; 
+            color: #ffffff; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             overflow: hidden;
         }
-        .app-container {
-            display: flex;
-            width: 1000px;
-            height: 700px;
-            background-color: var(--panel-bg);
-            border-radius: 12px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.8);
-            border: 1px solid #30363d;
-            overflow: hidden;
-        }
-        .sidebar {
-            width: 280px;
-            padding: 24px;
-            background-color: #0d1117;
-            border-right: 1px solid #30363d;
+
+        /* 좌측 UI 패널 */
+        #ui-panel {
+            width: 320px;
+            background-color: #1a1a24;
+            padding: 30px 20px;
             display: flex;
             flex-direction: column;
-            box-sizing: border-box;
+            gap: 25px;
+            border-right: 1px solid #333;
+            z-index: 10;
         }
-        .sidebar h2 {
-            margin-top: 0;
-            font-size: 1.25rem;
-            color: #fff;
-            border-bottom: 1px solid #30363d;
-            padding-bottom: 12px;
-            margin-bottom: 20px;
+        h2 { font-size: 1.2rem; color: #00ffcc; text-align: center; margin-bottom: 10px; }
+        .control-group { display: flex; flex-direction: column; gap: 10px; }
+        label { font-size: 0.9rem; color: #ccc; }
+        
+        .radio-group { display: flex; flex-direction: column; gap: 8px; }
+        .radio-label {
+            display: flex; align-items: center; gap: 8px;
+            background: #2a2a35; padding: 10px; border-radius: 6px; cursor: pointer;
+            transition: background 0.2s;
         }
-        .form-group {
-            margin-bottom: 24px;
-        }
-        .form-group label.title {
-            display: block;
-            font-weight: 600;
-            margin-bottom: 12px;
-            color: #fff;
-            font-size: 0.95rem;
-        }
-        .radio-list {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-        .radio-list label {
-            display: flex;
-            align-items: center;
-            cursor: pointer;
-            font-size: 0.9rem;
-        }
-        .radio-list input {
-            margin-right: 8px;
-            cursor: pointer;
-        }
-        .slider-container {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-        .slider-container input[type="range"] {
-            flex-grow: 1;
-            cursor: pointer;
-        }
-        .slider-labels {
-            display: flex;
-            justify-content: space-between;
-            font-size: 0.8rem;
-            color: #8b949e;
-            margin-top: 4px;
-        }
-        .btn-group {
-            margin-top: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
+        .radio-label:hover { background: #353545; }
+        
+        input[type="range"] { width: 100%; cursor: pointer; }
+        .slider-val { font-weight: bold; color: #00ffcc; font-size: 1.1rem; text-align: right; }
+
         button {
-            padding: 12px;
-            border: none;
-            border-radius: 6px;
-            font-size: 1rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: opacity 0.2s;
+            padding: 12px; font-size: 1rem; font-weight: bold; border: none; border-radius: 6px;
+            cursor: pointer; transition: transform 0.1s, background 0.2s;
         }
-        button:hover {
-            opacity: 0.8;
+        #btn-start { background-color: #00ffcc; color: #000; }
+        #btn-start:hover { background-color: #00ccaa; }
+        #btn-start:active { transform: scale(0.98); }
+        
+        #btn-reset { 
+            background-color: #ff3366; color: #fff; 
+            display: none; /* 결과 2초 후 표시 */
         }
-        #btn-start {
-            background-color: var(--success);
-            color: white;
-        }
-        #btn-start:disabled {
-            background-color: #2ea04380;
-            cursor: not-allowed;
-        }
-        #btn-reset {
-            background-color: #21262d;
-            color: #c9d1d9;
-            border: 1px solid #363b42;
-        }
-        .canvas-area {
-            flex-grow: 1;
+        #btn-reset:hover { background-color: #cc2952; }
+
+        /* 우측 시뮬레이션 캔버스 영역 */
+        #canvas-container {
+            flex: 1;
             position: relative;
-            background: radial-gradient(circle at center, #0d1117 0%, #010409 100%);
             display: flex;
             justify-content: center;
             align-items: center;
@@ -137,394 +66,116 @@
         canvas {
             display: block;
         }
-        .result-overlay {
+
+        /* 결과 오버레이 */
+        #result-overlay {
             position: absolute;
-            top: 50%;
-            left: 50%;
+            top: 50%; left: 50%;
             transform: translate(-50%, -50%);
-            font-size: 4rem;
-            font-weight: 800;
-            letter-spacing: 4px;
-            opacity: 0;
+            font-size: 5rem;
+            font-weight: 900;
+            letter-spacing: 5px;
             pointer-events: none;
-            text-shadow: 0 4px 12px rgba(0,0,0,0.8);
+            opacity: 0;
             transition: opacity 0.3s ease;
+            text-shadow: 0 0 20px rgba(0,0,0,0.8);
         }
-        .result-overlay.show-success {
-            color: var(--success);
-            opacity: 1;
-        }
-        .result-overlay.show-fail {
-            color: var(--fail);
-            opacity: 1;
-        }
+        .success { color: #00ffcc; }
+        .fail { color: #ff3366; }
+        .show { opacity: 1 !important; }
+
     </style>
 </head>
 <body>
 
-<div class="app-container">
-    <div class="sidebar">
-        <h2>Deorbit Control</h2>
+    <div id="ui-panel">
+        <h2>위성 낙하 시뮬레이션</h2>
         
-        <div class="form-group">
-            <label class="title">위성 선택</label>
-            <div class="radio-list">
-                <label><input type="radio" name="satellite" value="sputnik" checked> 스푸트니크 1호</label>
-                <label><input type="radio" name="satellite" value="mir"> 미르 우주정거장</label>
-                <label><input type="radio" name="satellite" value="iss"> 국제우주정거장 (ISS)</label>
+        <div class="control-group">
+            <label>대상 위성 선택</label>
+            <div class="radio-group">
+                <label class="radio-label">
+                    <input type="radio" name="satellite" value="sputnik" checked>
+                    스푸트니크 1호
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="satellite" value="mir">
+                    미르 우주정거장
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="satellite" value="iss">
+                    국제우주정거장 (ISS)
+                </label>
             </div>
         </div>
 
-        <div class="form-group">
-            <label class="title">감속량 설정 (Δv)</label>
-            <div class="slider-container">
-                <input type="range" id="delta-v" min="10" max="300" value="150">
-            </div>
-            <div class="slider-labels">
-                <span>10</span>
-                <span>300</span>
-            </div>
+        <div class="control-group">
+            <label>감속량 (Δv)</label>
+            <input type="range" id="dv-slider" min="10" max="300" value="150" step="1">
+            <div class="slider-val"><span id="dv-display">150</span> m/s</div>
         </div>
 
-        <div class="btn-group">
-            <button id="btn-start">시작 (Deorbit)</button>
-            <button id="btn-reset">Reset</button>
-        </div>
+        <button id="btn-start">시작 (Start)</button>
+        <button id="btn-reset">리셋 (Reset)</button>
     </div>
-    
-    <div class="canvas-area">
-        <canvas id="simCanvas" width="700" height="700"></canvas>
-        <div id="resultText" class="result-overlay"></div>
+
+    <div id="canvas-container">
+        <canvas id="simCanvas"></canvas>
+        <div id="result-overlay"></div>
     </div>
-</div>
 
-<script>
-    // --- 물리 상수 ---
-    const PHYS = {
-        mu: 3.986e14,
-        Re: 6378000,
-        atm_h: 100000,
-        rho_0: 1.225,
-        H: 7500,
-        nemo_R: 2688000
-    };
-
-    // --- 시각화 스케일 설정 ---
-    const VIS = {
-        Re: 150,           // 지구 시각적 반지름
-        atm_h: 30          // 대기권 두께 (R = 5h 조건: 150 = 5 * 30)
-    };
-    const scale_h = VIS.atm_h / PHYS.atm_h; // 고도(m) -> 픽셀 변환 비율
-
-    // --- 위성 제원 데이터 ---
-    const SATELLITES = {
-        sputnik: { m: 83.6, A: 0.26, Cd: 2.1, life: 1, k_break: 5000, h0_rel: 477000 },
-        mir: { m: 130000, A: 350, Cd: 2.3, life: 2, k_break: 150000, h0_rel: 290000 },
-        iss: { m: 450000, A: 2200, Cd: 2.6, life: 3, k_break: 400000, h0_rel: 320000 }
-    };
-
-    // --- DOM 엘리먼트 ---
-    const canvas = document.getElementById('simCanvas');
-    const ctx = canvas.getContext('2d');
-    const resultText = document.getElementById('resultText');
-    const btnStart = document.getElementById('btn-start');
-    const btnReset = document.getElementById('btn-reset');
-    const sliderDv = document.getElementById('delta-v');
-    const radioSats = document.getElementsByName('satellite');
-
-    const cx = canvas.width / 2;
-    const cy = canvas.height / 2;
-
-    // --- 시뮬레이션 상태 변수 ---
-    // states: 'ready', 'orbiting', 'falling', 'done'
-    let state = 'ready';
-    let currentSat = null;
-    let selectedDv = 150;
-    
-    let orbitStartRealTime = 0;
-    let fallStartRealTime = 0;
-    
-    // 물리 좌표 (지구 중심이 0,0. 단위: m. y축 위가 양수)
-    let phys_x = 0;
-    let phys_y = 0;
-    let phys_vx = 0;
-    let phys_vy = 0;
-    
-    // 시각화/역학 변수
-    let mathAngle = 0; 
-    let enteredAtmosphere = false;
-    let arcWidthRad = 0; // 파편 호의 시각적 각도 너비
-
-    // 타임스텝 (수치해석)
-    const DT = 2; 
-    const SUBSTEPS = 20;
-
-    // --- 유틸리티 함수 ---
-    function getSelectedSatKey() {
-        for (let r of radioSats) if (r.checked) return r.value;
-        return 'sputnik';
-    }
-
-    function resetSimulation() {
-        state = 'ready';
-        resultText.className = 'result-overlay';
-        resultText.innerText = '';
-        btnStart.disabled = false;
+    <script>
+        // --- 물리 상수 및 위성 제원 ---
+        const MU = 3.986e14;
+        const R_EARTH = 6378000;
+        const H_ATM = 100000; 
+        const RHO_0 = 1.225;
+        const H_SCALE = 7500;
         
-        let satKey = getSelectedSatKey();
-        currentSat = SATELLITES[satKey];
-        selectedDv = parseFloat(sliderDv.value);
-        
-        // 초기 시각적 각도: 좌측 (Math.PI)
-        mathAngle = Math.PI;
-        enteredAtmosphere = false;
-        arcWidthRad = 0;
-        
-        drawFrame();
-    }
+        const NEMO_RADIUS = 2688000;
+        const NEMO_ANGLE = NEMO_RADIUS / R_EARTH; // 약 0.421 rad
 
-    // 수학적 좌표(위가 +y)를 캔버스 좌표(아래가 +y)로 변환
-    function mathToVis(px, py) {
-        let r_phys = Math.sqrt(px*px + py*py);
-        let h_phys = r_phys - PHYS.Re;
-        let r_vis = VIS.Re + h_phys * scale_h;
-        let angle = Math.atan2(py, px); // [-pi, pi]
-        
-        // Canvas: x = cos, y = -sin (because +y is down)
-        return {
-            x: cx + r_vis * Math.cos(angle),
-            y: cy - r_vis * Math.sin(angle)
+        const SATELLITES = {
+            sputnik: { m: 83.6, A: 0.26, Cd: 2.1, life: 1, k: 5000, h: 477000 },
+            mir: { m: 130000, A: 350, Cd: 2.3, life: 2, k: 150000, h: 290000 },
+            iss: { m: 450000, A: 2200, Cd: 2.6, life: 3, k: 400000, h: 320000 }
         };
-    }
 
-    function normalizeAngle(a) {
-        let res = a % (2 * Math.PI);
-        if (res < -Math.PI) res += 2 * Math.PI;
-        if (res > Math.PI) res -= 2 * Math.PI;
-        return res;
-    }
+        // --- 시각화 스케일 ---
+        const VIS_R_EARTH = 150; 
+        const VIS_R_ATM = VIS_R_EARTH + 30; // 대기권 시각적 두께 (지구 반지름이 대기권의 5배 조건 충족)
 
-    // --- 메인 렌더링 로직 ---
-    function drawFrame() {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // --- DOM Elements ---
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        const dvSlider = document.getElementById('dv-slider');
+        const dvDisplay = document.getElementById('dv-display');
+        const btnStart = document.getElementById('btn-start');
+        const btnReset = document.getElementById('btn-reset');
+        const resultOverlay = document.getElementById('result-overlay');
+        const satRadios = document.getElementsByName('satellite');
 
-        // 1. 대기권 렌더링
-        ctx.beginPath();
-        ctx.arc(cx, cy, VIS.Re + VIS.atm_h, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(88, 166, 255, 0.08)';
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(88, 166, 255, 0.3)';
-        ctx.lineWidth = 1;
-        ctx.stroke();
-
-        // 2. 지구 렌더링
-        ctx.beginPath();
-        ctx.arc(cx, cy, VIS.Re, 0, Math.PI * 2);
-        ctx.fillStyle = '#0f1722';
-        ctx.fill();
-        ctx.strokeStyle = '#233142';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-
-        // 3. 포인트 니모 영역 렌더링 (지구 표면, 하단 -pi/2에 위치)
-        // Canvas에서 하단은 각도상 y가 +방향이므로 canvas angle로는 +pi/2
-        // Math Angle로는 -pi/2 입니다.
-        let nemoHalfRad = (PHYS.nemo_R / PHYS.Re); 
-        ctx.beginPath();
-        // ctx.arc는 시계방향이 기본. Canvas 중심 기준 바닥은 +Math.PI/2
-        ctx.arc(cx, cy, VIS.Re, Math.PI/2 - nemoHalfRad, Math.PI/2 + nemoHalfRad);
-        ctx.strokeStyle = '#3fb950'; // Success Green
-        ctx.lineWidth = 5;
-        ctx.stroke();
-
-        // 4. 위성 렌더링
-        let true_h0 = PHYS.atm_h + currentSat.h0_rel;
-        let true_r0 = PHYS.Re + true_h0;
-
-        if (state === 'ready' || state === 'orbiting') {
-            // 원운동 시각화
-            let r_vis = VIS.Re + true_h0 * scale_h;
-            let sx = cx + r_vis * Math.cos(mathAngle);
-            let sy = cy - r_vis * Math.sin(mathAngle);
-
-            ctx.beginPath();
-            ctx.arc(sx, sy, 4, 0, Math.PI * 2);
-            ctx.fillStyle = '#ffffff';
-            ctx.fill();
-            ctx.shadowBlur = 10;
-            ctx.shadowColor = '#ffffff';
-            ctx.fill();
-            ctx.shadowBlur = 0;
-        } 
-        else if (state === 'falling' || state === 'done') {
-            let pos = mathToVis(phys_x, phys_y);
-            let r_phys = Math.sqrt(phys_x*phys_x + phys_y*phys_y);
-            let currentMathAngle = Math.atan2(phys_y, phys_x);
-            // Canvas 각도는 mathAngle의 부호 반대
-            let canvasAngle = -currentMathAngle;
-
-            if (enteredAtmosphere) {
-                // 파편 면적(호)로 렌더링
-                let r_vis = Math.max(VIS.Re, VIS.Re + (r_phys - PHYS.Re)*scale_h);
-                ctx.beginPath();
-                ctx.arc(cx, cy, r_vis, canvasAngle - arcWidthRad/2, canvasAngle + arcWidthRad/2);
-                ctx.strokeStyle = 'var(--arc-color)';
-                ctx.lineWidth = 6;
-                ctx.stroke();
-                // 빛남 효과
-                ctx.shadowBlur = 15;
-                ctx.shadowColor = 'var(--fail)';
-                ctx.stroke();
-                ctx.shadowBlur = 0;
-            } else {
-                // 진입 전 단순 점 렌더링
-                ctx.beginPath();
-                ctx.arc(pos.x, pos.y, 4, 0, Math.PI * 2);
-                ctx.fillStyle = '#ffffff';
-                ctx.fill();
-            }
-        }
-    }
-
-    // --- 물리 업데이트 로직 ---
-    function updatePhysics() {
-        if (state === 'orbiting') {
-            let elapsed = (Date.now() - orbitStartRealTime) / 1000;
-            let life = currentSat.life;
-            
-            // 시각적 출발점(Math.PI, 좌측)에서 목표점(Math.PI/2, 상단)으로 역산 이동
-            // 시계방향 회전 (각도 감소)
-            mathAngle = Math.PI - (Math.PI/2) * (elapsed / life);
-
-            if (elapsed >= life) {
-                // 목표점(Top) 도달 시 역추진 즉시 트리거
-                let true_h0 = PHYS.atm_h + currentSat.h0_rel;
-                let true_r0 = PHYS.Re + true_h0;
-                let v0 = Math.sqrt(PHYS.mu / true_r0);
-
-                // Math 기준 상단 좌표: (0, r0)
-                phys_x = 0;
-                phys_y = true_r0;
-                // 우측(+x)으로 이동하는 궤도. 속도 = 기존 선속도 - 유저 감속량
-                phys_vx = v0 - selectedDv;
-                phys_vy = 0;
-
-                state = 'falling';
-                fallStartRealTime = Date.now();
-            }
-        } 
-        else if (state === 'falling') {
-            let realElapsed = (Date.now() - fallStartRealTime) / 1000;
-            let current_r = Math.sqrt(phys_x*phys_x + phys_y*phys_y);
-            let current_h = current_r - PHYS.Re;
-
-            // 판정 1: 2초 타임아웃 FAIL (무한 궤도 방지)
-            if (realElapsed > 2.0 && current_h > 0) {
-                endSimulation(false);
-                return;
-            }
-
-            // 수치해석 (Euler)
-            for (let i = 0; i < SUBSTEPS; i++) {
-                current_r = Math.sqrt(phys_x*phys_x + phys_y*phys_y);
-                current_h = current_r - PHYS.Re;
-
-                if (current_h <= 0) {
-                    evaluateTouchdown();
-                    return; // hit ground
-                }
-
-                let ag = -PHYS.mu / (current_r * current_r);
-                let ax = ag * (phys_x / current_r);
-                let ay = ag * (phys_y / current_r);
-
-                if (current_h < PHYS.atm_h) {
-                    let v = Math.sqrt(phys_vx*phys_vx + phys_vy*phys_vy);
-                    let rho = PHYS.rho_0 * Math.exp(-current_h / PHYS.H);
-                    let ad = 0.5 * rho * v * v * (currentSat.Cd * currentSat.A / currentSat.m);
-                    
-                    ax -= ad * (phys_vx / v);
-                    ay -= ad * (phys_vy / v);
-
-                    if (!enteredAtmosphere) {
-                        enteredAtmosphere = true;
-                        // 진입각 및 L_final 계산
-                        let vr = Math.abs((phys_x * phys_vx + phys_y * phys_vy) / current_r);
-                        let vt = Math.abs((-phys_y * phys_vx + phys_x * phys_vy) / current_r);
-                        let gamma = Math.max(0.0001, Math.atan2(vr, vt));
-                        
-                        let L_final = currentSat.k_break / Math.sin(gamma);
-                        arcWidthRad = L_final / PHYS.Re;
-                    }
-                }
-
-                phys_vx += ax * DT;
-                phys_vy += ay * DT;
-                phys_x += phys_vx * DT;
-                phys_y += phys_vy * DT;
-            }
-        }
-    }
-
-    function evaluateTouchdown() {
-        state = 'done';
-        let hitMathAngle = Math.atan2(phys_y, phys_x);
+        // --- 시뮬레이션 상태 변수 ---
+        let width, height, cx, cy;
+        let animationId = null;
+        let phase = 'idle'; // 'idle', 'orbit', 'deorbit', 'done'
         
-        let nHit = normalizeAngle(hitMathAngle);
-        let nTarget = -Math.PI / 2; // 포인트 니모는 하단 (Math Angle 기준 -pi/2)
+        let activeSat = null;
+        let dv = 150;
+        
+        let orbitStartTime = 0;
+        let deorbitStartTime = 0;
+        
+        // 물리 좌표계 상태
+        let state = { x: 0, y: 0, vx: 0, vy: 0 };
+        let enteredAtmosphere = false;
+        let finalL_angle = 0;
+        let pathHistory = [];
 
-        let diff = Math.abs(normalizeAngle(nHit - nTarget));
-        let nemoHalfRad = (PHYS.nemo_R / PHYS.Re);
-        let arcHalfRad = arcWidthRad / 2;
-
-        // 파편 전체가 포인트 니모 영역 내에 완전히 들어왔는지 판정
-        if (diff + arcHalfRad <= nemoHalfRad) {
-            endSimulation(true);
-        } else {
-            endSimulation(false);
-        }
-    }
-
-    function endSimulation(isSuccess) {
-        state = 'done';
-        resultText.innerText = isSuccess ? "SUCCESS" : "FAIL";
-        resultText.className = `result-overlay ${isSuccess ? 'show-success' : 'show-fail'}`;
-    }
-
-    // --- 시뮬레이션 루프 ---
-    function loop() {
-        if (state !== 'ready' && state !== 'done') {
-            updatePhysics();
-        }
-        drawFrame();
-        requestAnimationFrame(loop);
-    }
-
-    // --- 이벤트 리스너 ---
-    sliderDv.addEventListener('input', (e) => {
-        if (state === 'ready') selectedDv = parseFloat(e.target.value);
-    });
-
-    radioSats.forEach(radio => {
-        radio.addEventListener('change', () => {
-            if (state === 'ready') resetSimulation();
-        });
-    });
-
-    btnStart.addEventListener('click', () => {
-        if (state === 'ready') {
-            orbitStartRealTime = Date.now();
-            state = 'orbiting';
-            btnStart.disabled = true;
-        }
-    });
-
-    btnReset.addEventListener('click', resetSimulation);
-
-    // 초기화 및 루프 실행
-    resetSimulation();
-    requestAnimationFrame(loop);
-
-</script>
-</body>
-</html>
+        // --- 초기화 및 이벤트 바인딩 ---
+        function resize() {
+            width = canvas.parentElement.clientWidth;
+            height = canvas.parentElement.clientHeight;
+            canvas.width = width;
+            canvas.height = height;
+            cx
